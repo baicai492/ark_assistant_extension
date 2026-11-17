@@ -5,7 +5,7 @@ function workforceModel(view) {
     water: { name: '净水站', stat: 'per', resource: 'water', base: 8 },
     scrap: { name: '废料回收站', stat: 'end', resource: 'scrap', base: 8 },
     medbay: { name: '医务室', stat: 'int', resource: 'stimpak', base: 0.5 },
-    workshop: { name: '工坊', stat: 'int', resource: 'parts', base: 0.6 },
+    workshop: { name: '零件工坊', stat: 'int', resource: 'parts', base: 0.6 },
     radio: { name: '电台', stat: 'cha' },
     training: { name: '训练室' }
   };
@@ -171,14 +171,22 @@ function planResourceBalance(view) {
   const positions = new Map(view.state.residents.filter(atHome).map(resident => [resident.id, resident.roomId]));
   const resourceOf = room => types[room.type]?.resource ?? null;
   const occupants = room => view.state.residents.filter(resident => atHome(resident) && positions.get(resident.id) === room.id).length;
-  // 按调出损失从小到大的岗位顺序：废料、零件、医务室，电台最后。
-  const originOrder = { scrap: 0, workshop: 1, medbay: 2, radio: 3 };
+  // 调出优先废料回收站（废料通常富余），其次医务室、电台，最后才是零件工坊。
+  const originOrder = { scrap: 0, medbay: 1, radio: 2, workshop: 3 };
   const assignments = [];
   for (let step = 0; step < 12; step++) {
     const net = model.net(assignments);
     const deficits = deficitsKeys.filter(key => net[key] < 0).sort((left, right) => net[left] - net[right]);
     if (!deficits.length) break;
     let best = null;
+    // 逐项比较：缺口大的资源优先，同一资源优先等级高的工作地点，再比较产出增益。
+    const better = (left, right) => {
+      for (let index = 0; index < left.length; index++) {
+        if (left[index] !== right[index]) return left[index] > right[index];
+      }
+      return false;
+    };
+    const same = (left, right) => left.every((value, index) => value === right[index]);
     for (const resident of view.state.residents) {
       if (!atHome(resident)) continue;
       const origin = roomById.get(positions.get(resident.id));
@@ -189,15 +197,13 @@ function planResourceBalance(view) {
       const loss = model.rate(resident, origin);
       // 调出后原岗位的资源仍不能为负。
       if (net[originResource] - loss < 0) continue;
-      for (const resource of deficits) {
+      for (const [resourceIndex, resource] of deficits.entries()) {
         for (const room of rooms.filter(room => resourceOf(room) === resource && occupants(room) < room.width * 2)) {
           const gain = model.rate(resident, room);
           if (gain <= 0) continue;
-          const score = [gain, -(originOrder[origin.type] ?? 9), -loss];
-          if (!best || score[0] > best.score[0] ||
-              score[0] === best.score[0] && (score[1] > best.score[1] ||
-                score[1] === best.score[1] && (score[2] > best.score[2] ||
-                  score[2] === best.score[2] && resident.id < best.resident.id))) {
+          // 同产品优先等级高的房间；缺口相同时优先从废料回收站调人，再比较产出增益。
+          const score = [deficits.length - resourceIndex, room.level, -(originOrder[origin.type] ?? 9), gain, -loss];
+          if (!best || better(score, best.score) || same(score, best.score) && resident.id < best.resident.id) {
             best = { resident, origin, room, score };
           }
         }

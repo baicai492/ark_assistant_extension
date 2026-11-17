@@ -124,17 +124,17 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   // 自动生育：只从全 10 属性、可配对（成年、在家、心情≥50、不在冷却、无亲属关系）的居民中配对，
   // 放进有空位的宿舍等待服务端每 10 分钟结算感情，感情满后自动待产、出生。
   // 自动生育的子代按造神计划处理：属性总和未满 70 的优先训练，按总和从高到低排队。
-  async function autoBirth() {
+  async function autoBirth(quiet = false) {
     const now = view.serverTime;
     const living = view.state.residents.filter(resident => resident.deadAt === null).length + view.state.births.length;
     const capacity = Math.min(200, view.state.rooms.filter(room => room.type === 'quarters')
       .reduce((sum, room) => sum + room.width * (2 + 2 * room.level), 0));
-    if (living >= capacity) { log(`自动生育：人口已满（${living}/${capacity}），本轮不安排新配对。`); return; }
+    if (living >= capacity) { if (!quiet) log(`自动生育：人口已满（${living}/${capacity}），本轮不安排新配对。`); return; }
     const rooms = view.state.rooms.filter(room => room.type === 'quarters' && room.builtAt <= now &&
       room.upgradeAt === null && !room.incident && ['id', 'level', 'width', 'floor'].every(key => Number.isFinite(room[key])))
       .sort((left, right) => right.level - left.level || right.width - left.width || left.floor - right.floor || left.id - right.id);
     const slots = rooms.reduce((sum, room) => sum + freePairSlots(room), 0);
-    if (!slots) { log('自动生育：没有可用宿舍空位。'); return; }
+    if (!slots) { if (!quiet) log('自动生育：没有可用宿舍空位。'); return; }
     const pendingParents = new Set(view.state.births.flatMap(birth => birth.parents));
     const autoParents = new Set(task.autoParents);
     const candidates = view.state.residents.filter(resident => {
@@ -157,7 +157,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       used.add(right.id);
       pairs.push([left, right]);
     }
-    if (!pairs.length) { log('自动生育：没有可用的全属性 10 配对。'); return; }
+    if (!pairs.length) { if (!quiet) log('自动生育：没有可用的全属性 10 配对。'); return; }
     for (const room of rooms) {
       let free = freePairSlots(room);
       while (free > 0 && pairs.length) {
@@ -344,12 +344,18 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         : `造神计划：${resident.name} 已成年且属性满 70，安排到 ${choice.floor} 层${roomLabels[choice.type] ?? choice.type}（房间 ${choice.id}）。`);
     }
   }
-  // 快速检查：成年子代安排训练或工作、待产父母回岗、穿上装备，不必等完整检查间隔。
+  // 快速检查：成年子代安排训练或工作、待产父母回岗、配对后补资源缺口、穿上装备，
+  // 不必等完整检查间隔。
   async function quickCheck() {
     await read();
     if (stopped()) return;
     if (task.incidentSnapshot || view.state.rooms.some(room => room.incident)) return;
     await returnParents();
+    if (stopped()) return;
+    await autoBirth(true);
+    if (stopped()) return;
+    // 配对把人调去宿舍后可能立刻出现电力、食物、净水缺口，马上从废料回收站等岗位补人。
+    await balanceResources();
     if (stopped()) return;
     await assignGrownChildren();
     if (stopped()) return;
@@ -511,6 +517,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
               await assignGrownChildren();
             }
           }
+          if (stopped()) break;
+          // 造神计划和自动生育调动结束后再补一次缺口：配对把居民拉去宿舍后可能出现负收益。
+          if ((godEnabled || task.birthEnabled) && !paused()) await balanceResources();
           if (stopped()) break;
           // 岗位调整完成后统一穿戴装备：按房间需要的属性重新分配服装。
           if ((godEnabled || task.birthEnabled) && paused()) log('装备分配：事件处理中，暂停换装。');
