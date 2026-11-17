@@ -247,10 +247,8 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     }
   }
   // 生育完成（进入待产或已经出生）后，父母立即回到生产岗位并穿戴对应装备；
-  // 还在宿舍培养感情的配对继续保留。
+  // 还在宿舍培养感情的配对继续保留。待产记录和家庭冷却都在服务端状态里，刷新面板后同样有效。
   async function returnParents() {
-    const parents = new Set(task.autoParents);
-    if (!parents.size) return;
     const pending = new Set(view.state.births.flatMap(birth => birth.parents));
     task.autoPairs = task.autoPairs.filter(pair => {
       const [left, right] = pair.ids.map(id => view.state.residents.find(item => item.id === id));
@@ -264,10 +262,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     });
     const pairing = new Set(task.autoPairs.flatMap(pair => pair.ids));
     const candidates = view.state.residents.filter(resident => {
-      if (!parents.has(resident.id) || pairing.has(resident.id)) return false;
+      if (pairing.has(resident.id)) return false;
       if (resident.deadAt !== null || resident.away !== null || resident.adultAt > view.serverTime) return false;
       const room = view.state.rooms.find(item => item.id === resident.roomId);
       if (room && room.type !== 'quarters') return false;
+      // 待产父母，或孩子已出生、正处于家庭冷却的父母。
       return pending.has(resident.id) || resident.familyCooldownUntil > view.serverTime;
     }).sort((left, right) => left.id - right.id);
     for (const member of candidates) {
@@ -281,11 +280,10 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       log(`自动生育：${resident.name} 生育完成，回到${room.floor} 层 ${room.level} 级${roomLabels[room.type] ?? room.type}（房间 ${room.id}）。`);
     }
   }
-  // 造神计划：自动生育的子代成年后，属性总和未到 70 的优先训练（按总和从高到低排队，
-  // 先练最高的未满属性）；满 70 后再按资源缺口和零件、废料等顺序安排生产岗位。
+  // 造神计划：成年子代（有父母且父母仍在避难所，含手动生育）属性总和未到 70 的优先训练，
+  // 按总和从高到低排队，先练最高的未满属性；没有训练空位或已满 70 时按资源缺口和零件、
+  // 废料等顺序安排生产岗位，不留在宿舍等待。
   async function assignGrownChildren() {
-    const parents = new Set(task.autoParents);
-    if (!parents.size) return;
     const assigned = new Set(task.autoAssigned);
     const total = resident => keys.reduce((sum, key) => sum + resident.stats[key], 0);
     const occupied = roomId => view.state.residents.filter(item => item.roomId === roomId && item.deadAt === null &&
@@ -297,9 +295,12 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         .sort((left, right) => resident.stats[right.trainStat] - resident.stats[left.trainStat] ||
           right.level - left.level || right.width - left.width || left.floor - right.floor || left.id - right.id)[0] ?? null;
     }
+    // 刷新面板后 autoParents 会丢失，因此按“父母仍在避难所”识别成年子代；
+    // 无父母的新人、已在生产或训练岗位的居民不在其中。
+    const living = new Set(view.state.residents.filter(resident => resident.deadAt === null).map(resident => resident.id));
     const children = view.state.residents.filter(resident =>
       !assigned.has(resident.id) && resident.deadAt === null && resident.away === null && resident.adultAt <= view.serverTime &&
-      resident.parents.length === 2 && resident.parents.every(id => parents.has(id)))
+      resident.parents.length === 2 && resident.parents.every(id => living.has(id)))
       .sort((left, right) => total(right) - total(left) || left.id - right.id);
     for (const member of children) {
       if (stopped()) return;
@@ -310,26 +311,49 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       const currentRoom = view.state.rooms.find(item => item.id === resident.roomId);
       if (currentRoom?.type === 'training' && sum < 70 && resident.stats[currentRoom.trainStat] < 10) continue;
       if (currentRoom && currentRoom.type !== 'training' && !['quarters', 'storage', 'door', 'elevator'].includes(currentRoom.type)) {
+        // 已在生产岗位且未满 70 的成年子代，有空训练位时转去训练；否则保持岗位。
+        const training = sum < 70 ? trainingRoom(resident) : null;
+        if (training) {
+          if (!await act({ type: 'assign', residentId: resident.id, roomId: training.id })) return;
+          if (view.state.residents.find(item => item.id === resident.id)?.roomId !== training.id) throw new Error('训练安排结果未确认');
+          log(`造神计划：${resident.name}（属性 ${sum}/70）训练空位已出现，转练 ${statLabels[training.trainStat]} → ${training.floor} 层训练室（房间 ${training.id}）。`);
+          continue;
+        }
         task.autoAssigned.push(resident.id);
         assigned.add(resident.id);
         continue;
       }
       if (sum < 70) {
         const room = trainingRoom(resident);
-        if (!room) { log(`造神计划：${resident.name}（属性 ${sum}/70）暂无训练空位，留在原处等待。`); continue; }
-        if (!await act({ type: 'assign', residentId: resident.id, roomId: room.id })) return;
-        if (view.state.residents.find(item => item.id === resident.id)?.roomId !== room.id) throw new Error('训练安排结果未确认');
-        log(`造神计划：${resident.name} 已成年（属性 ${sum}/70），优先训练 ${statLabels[room.trainStat]} → ${room.floor} 层训练室（房间 ${room.id}）。`);
-        continue;
+        if (room) {
+          if (!await act({ type: 'assign', residentId: resident.id, roomId: room.id })) return;
+          if (view.state.residents.find(item => item.id === resident.id)?.roomId !== room.id) throw new Error('训练安排结果未确认');
+          log(`造神计划：${resident.name} 已成年（属性 ${sum}/70），优先训练 ${statLabels[room.trainStat]} → ${room.floor} 层训练室（房间 ${room.id}）。`);
+          continue;
+        }
       }
+      // 没有训练空位时直接去生产岗位，不留在宿舍等待。
       const choice = chooseProductionRoom(resident);
-      if (!choice) { log(`造神计划：${resident.name} 已成年且属性满 70，暂无生产空位，下轮继续。`); continue; }
+      if (!choice) { log(`造神计划：${resident.name} 已成年，暂无训练或生产空位，下轮继续。`); continue; }
       if (!await act({ type: 'assign', residentId: resident.id, roomId: choice.id })) return;
       if (view.state.residents.find(item => item.id === resident.id)?.roomId !== choice.id) throw new Error('成年居民安排结果未确认');
       task.autoAssigned.push(resident.id);
       assigned.add(resident.id);
-      log(`造神计划：${resident.name} 已成年且属性满 70，安排到 ${choice.floor} 层${roomLabels[choice.type] ?? choice.type}（房间 ${choice.id}）。`);
+      log(sum < 70
+        ? `造神计划：${resident.name} 已成年（属性 ${sum}/70），暂无训练空位，先安排到 ${choice.floor} 层${roomLabels[choice.type] ?? choice.type}（房间 ${choice.id}）。`
+        : `造神计划：${resident.name} 已成年且属性满 70，安排到 ${choice.floor} 层${roomLabels[choice.type] ?? choice.type}（房间 ${choice.id}）。`);
     }
+  }
+  // 快速检查：成年子代安排训练或工作、待产父母回岗、穿上装备，不必等完整检查间隔。
+  async function quickCheck() {
+    await read();
+    if (stopped()) return;
+    if (task.incidentSnapshot || view.state.rooms.some(room => room.incident)) return;
+    await returnParents();
+    if (stopped()) return;
+    await assignGrownChildren();
+    if (stopped()) return;
+    await applyOutfits();
   }
   (async () => {
     try {
@@ -544,10 +568,22 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           roundError = true;
         }
         if (stopped()) break;
-        task.nextAt = Date.now() + intervalSeconds * 1000;
+        const nextAt = Date.now() + intervalSeconds * 1000;
+        task.nextAt = nextAt;
         log(`本轮${roundError ? '因临时错误跳过剩余步骤' : '完成'}，${intervalSeconds} 秒后开始下一轮。`);
         roundError = false;
-        await wait(intervalSeconds * 1000);
+        // 成年子代、待产父母和装备不必等完整间隔：等待期间每 30 秒快速检查一次。
+        while (!stopped() && Date.now() < nextAt) {
+          await wait(Math.min(30000, nextAt - Date.now()));
+          if (stopped()) break;
+          if (!task.birthEnabled) continue;
+          try {
+            await quickCheck();
+          } catch (error) {
+            if (error.fatal) throw error;
+            if (error.stopped || stopped()) break;
+          }
+        }
         task.nextAt = null;
       }
       log('托管已关闭；已执行操作保留。');
