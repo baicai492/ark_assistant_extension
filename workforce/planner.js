@@ -170,7 +170,8 @@ function planResourceBalance(view) {
   const atHome = resident => resident.away === null && resident.deadAt === null && resident.adultAt <= now;
   const positions = new Map(view.state.residents.filter(atHome).map(resident => [resident.id, resident.roomId]));
   const resourceOf = room => types[room.type]?.resource ?? null;
-  const occupants = room => view.state.residents.filter(resident => atHome(resident) && positions.get(resident.id) === room.id).length;
+  const occupants = room => view.state.residents.filter(resident => resident.deadAt === null && resident.adultAt <= now &&
+    (positions.get(resident.id) ?? resident.roomId) === room.id).length;
   // 调出优先废料回收站（废料通常富余），其次医务室、电台，最后才是零件工坊。
   const originOrder = { scrap: 0, medbay: 1, radio: 2, workshop: 3 };
   const assignments = [];
