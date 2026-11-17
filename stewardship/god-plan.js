@@ -5,7 +5,7 @@ function planShelterGod(view) {
   const keys = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'];
   const labels = { str: '力量', per: '感知', end: '耐力', cha: '魅力', int: '智力', agi: '敏捷', lck: '幸运' };
   const production = { str: ['power'], per: ['water'], agi: ['diner'], int: ['workshop', 'medbay'], end: ['scrap'], cha: ['radio'], lck: [] };
-  const names = { power: '发电站', water: '净水站', diner: '餐厅', workshop: '工坊', medbay: '医务室', scrap: '废料回收站', radio: '电台' };
+  const names = { power: '发电站', water: '净水站', diner: '餐厅', workshop: '零件工坊', medbay: '医务室', scrap: '废料回收站', radio: '电台' };
   const total = resident => keys.reduce((sum, key) => sum + resident.stats[key], 0);
   const workers = residents.filter(resident => resident.away === null && resident.deadAt === null && resident.adultAt <= now);
   const positions = new Map(workers.map(resident => [resident.id, resident.roomId]));
@@ -41,7 +41,8 @@ function planShelterGod(view) {
       const model = workforceModel(view);
       const net = model.net(assignments);
       const deficits = ['power', 'food', 'water'].filter(key => net[key] < 0).sort((left, right) => net[left] - net[right]);
-      const order = [...deficits, 'scrap', 'parts', 'stimpak'];
+      // 缺口补齐后优先零件工坊，再废料回收站、医务室，最后电台；零件不能把废料吃成负数。
+      const order = [...deficits, 'parts', 'scrap', 'stimpak'];
       for (const resource of order) {
         const options = candidates.filter(room => model.types[room.type]?.resource === resource)
           .map(room => ({ room, net: model.net([...assignments, { residentId: resident.id, roomId: room.id }]) }))
@@ -97,10 +98,18 @@ function planShelterGod(view) {
     if (room.incident || pendingParents.has(resident.id) || total(resident) >= 70) return false;
     return true;
   }).sort((left, right) => total(right) - total(left) || left.id - right.id);
+  // 训练不产出：抽人前先确认电力、食物、净水不会因此转负，保证资源缺口优先。
+  const model = typeof workforceModel === 'function' ? workforceModel(view) : null;
+  const critical = ['power', 'food', 'water'];
   for (const resident of candidates) {
     const room = nextTraining(resident, null);
     // 高总分居民未必有对应的空训练室，继续找下一位，而不是提前停止。
     if (!room) continue;
+    if (model) {
+      const before = model.net(assignments);
+      const after = model.net([...assignments, { residentId: resident.id, roomId: room.id }]);
+      if (critical.some(key => before[key] >= 0 && after[key] < 0)) continue;
+    }
     move(resident, room, `造神计划：${resident.name}（属性 ${total(resident)}/70）优先训练 → ${roomName(room)}。`);
   }
   return { assignments, parents };

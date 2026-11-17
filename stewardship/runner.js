@@ -6,10 +6,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   if (rescueEnabled && rescueMode === 'auto' && (!Number.isInteger(rescueCount) || rescueCount < 1)) throw new Error('救援次数必须为正整数');
   if (dismissEnabled && (!Number.isInteger(dismissTotal) || dismissTotal < 1 || dismissTotal > 70)) throw new Error('遣散阈值必须为 1–70 的整数');
   const statLabels = { str: '力量', per: '感知', end: '耐力', cha: '魅力', int: '智力', agi: '敏捷', lck: '幸运' };
+  const roomLabels = { power: '发电站', diner: '餐厅', water: '净水站', scrap: '废料回收站', workshop: '零件工坊', medbay: '医务室', radio: '电台', training: '训练室' };
   const keys = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'];
   if (dismissStatEnabled && !Object.hasOwn(statLabels, dismissStatKey)) throw new Error('请选择单项遣散的指定属性');
   if (dismissStatEnabled && (!Number.isInteger(dismissStat) || dismissStat < 1 || dismissStat > 10)) throw new Error('单项属性遣散阈值必须为 1–10 的整数');
-  const task = { running: true, stopRequested: false, intervalSeconds, rescueEnabled, rescueMode, rescueCount, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, godEnabled, birthEnabled: Boolean(birthEnabled), logs: previous?.logs ?? [], message: '正在开启托管…', nextAt: null, pendingDispatch: previous?.pendingDispatch ?? {}, newcomers: previous?.newcomers ?? [], knownIds: previous?.knownIds ?? null, deployments: previous?.deployments ?? {}, autoParents: previous?.autoParents ?? [], autoAssigned: previous?.autoAssigned ?? [] };
+  const task = { running: true, stopRequested: false, intervalSeconds, rescueEnabled, rescueMode, rescueCount, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, godEnabled, birthEnabled: Boolean(birthEnabled), logs: previous?.logs ?? [], message: '正在开启托管…', nextAt: null, pendingDispatch: previous?.pendingDispatch ?? {}, newcomers: previous?.newcomers ?? [], knownIds: previous?.knownIds ?? null, deployments: previous?.deployments ?? {}, autoParents: previous?.autoParents ?? [], autoAssigned: previous?.autoAssigned ?? [], autoPairs: previous?.autoPairs ?? [] };
   task.incidentSnapshot = previous?.incidentSnapshot ?? null;
   globalThis.__fengbaoShelterAuto = task;
   const log = message => { task.logs.push(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${message}`); if (task.logs.length > 2000) task.logs.shift(); task.message = message; };
@@ -173,13 +174,115 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           if (view.state.residents.find(item => item.id === resident.id)?.roomId !== room.id) throw new Error('自动配对入住结果未确认');
         }
         for (const id of [left.id, right.id]) if (!task.autoParents.includes(id)) task.autoParents.push(id);
+        // 记录配对宿舍，待产记录出现后由 returnParents 释放父母回岗。
+        if (!task.autoPairs.some(pair => pair.ids.includes(left.id) && pair.ids.includes(right.id))) {
+          task.autoPairs.push({ roomId: room.id, ids: [left.id, right.id] });
+        }
         free--;
         log(`自动生育：${left.name} ＋ ${right.name} → ${room.floor} 层 ${room.level} 级宿舍（房间 ${room.id}）。`);
       }
     }
   }
+  // 生产岗位：先补电力、食物、净水缺口，正收益时优先零件工坊（不能把废料吃成负数），
+  // 再废料回收站、医务室，最后电台。
+  function chooseProductionRoom(resident) {
+    const model = workforceModel(view);
+    const occupied = roomId => view.state.residents.filter(item => item.roomId === roomId && item.deadAt === null &&
+      item.away === null && item.adultAt <= view.serverTime).length;
+    const rooms = model.rooms.filter(room => room.type !== 'training' && occupied(room.id) < room.width * 2);
+    const net = model.net();
+    const deficits = ['power', 'food', 'water'].filter(key => net[key] < 0).sort((left, right) => net[left] - net[right]);
+    const order = [...deficits, 'parts', 'scrap', 'stimpak'];
+    for (const resource of order) {
+      const options = rooms.filter(room => model.types[room.type]?.resource === resource)
+        .map(room => ({ room, net: model.net([{ residentId: resident.id, roomId: room.id }]) }))
+        .filter(item => resource !== 'parts' || item.net.scrap >= 0)
+        .sort((left, right) => right.room.level - left.room.level || right.room.width - left.room.width ||
+          left.room.floor - right.room.floor || left.room.id - right.room.id);
+      if (options.length) return options[0].room;
+    }
+    return rooms.filter(room => room.type === 'radio')
+      .sort((left, right) => right.level - left.level || left.floor - right.floor || left.id - right.id)[0] ?? null;
+  }
+  // 资源补缺：电力、食物、净水为负时，从废料回收站、零件工坊等非缺口岗位调人补进空位。
+  async function balanceResources() {
+    const assignments = planResourceBalance(view);
+    if (assignments.length) {
+      log(`资源补缺：本轮 ${assignments.length} 步调动。`);
+      for (const { residentId, roomId, message } of assignments) {
+        if (stopped()) return;
+        if (!await act({ type: 'assign', residentId, roomId })) return;
+        if (view.state.residents.find(item => item.id === residentId)?.roomId !== roomId) throw new Error('资源补缺调动结果未确认');
+        log(message);
+      }
+    }
+    const net = workforceModel(view).net();
+    const deficits = ['power', 'food', 'water'].filter(key => net[key] < 0);
+    if (!deficits.length) task.deficitNotice = null;
+    else {
+      const labels = { power: '电力', food: '食物', water: '净水' };
+      const notice = deficits.map(key => `${labels[key]} ${net[key].toFixed(1)}/时`).join('、');
+      // 缺口没有变化时不重复写日志。
+      if (task.deficitNotice !== notice) {
+        log(`资源补缺：${notice} 仍为负，非缺口岗位暂无可调居民，请手动安排。`);
+        task.deficitNotice = notice;
+      }
+    }
+  }
+  // 自动穿装备：按居民房间需要的属性分配服装，仓库和无岗位需求居民身上的服装可以重新分配。
+  async function applyOutfits() {
+    const plan = planOutfits(view);
+    for (const change of plan.changes) {
+      if (stopped()) return;
+      try {
+        if (!await act({ type: 'equip', residentId: change.residentId, itemId: change.itemId, slot: 'outfit' })) return;
+        const resident = view.state.residents.find(item => item.id === change.residentId);
+        if (resident?.outfitId !== change.itemId) throw new Error('穿戴结果未确认');
+        log(`装备分配：${change.residentName} 穿上${change.itemName}（${statLabels[change.stat]} +${change.bonus}）。`);
+      } catch (error) {
+        if (error.fatal || error.stopped) throw error;
+        log(`装备分配：${change.residentName} 换装失败：${error.message}。`);
+        await read();
+      }
+    }
+  }
+  // 生育完成（进入待产或已经出生）后，父母立即回到生产岗位并穿戴对应装备；
+  // 还在宿舍培养感情的配对继续保留。
+  async function returnParents() {
+    const parents = new Set(task.autoParents);
+    if (!parents.size) return;
+    const pending = new Set(view.state.births.flatMap(birth => birth.parents));
+    task.autoPairs = task.autoPairs.filter(pair => {
+      const [left, right] = pair.ids.map(id => view.state.residents.find(item => item.id === id));
+      const room = view.state.rooms.find(item => item.id === pair.roomId);
+      if (!left || !right || left.deadAt !== null || right.deadAt !== null) return false;
+      // 配对人员被调离宿舍或房间变化时作废，下一轮重新配对。
+      if (!room || room.type !== 'quarters' || left.roomId !== pair.roomId || right.roomId !== pair.roomId) return false;
+      // 任一人已待产或已进入家庭冷却，说明配对完成，父母可以离开宿舍。
+      const done = resident => pending.has(resident.id) || resident.familyCooldownUntil > view.serverTime;
+      return !(done(left) || done(right));
+    });
+    const pairing = new Set(task.autoPairs.flatMap(pair => pair.ids));
+    const candidates = view.state.residents.filter(resident => {
+      if (!parents.has(resident.id) || pairing.has(resident.id)) return false;
+      if (resident.deadAt !== null || resident.away !== null || resident.adultAt > view.serverTime) return false;
+      const room = view.state.rooms.find(item => item.id === resident.roomId);
+      if (room && room.type !== 'quarters') return false;
+      return pending.has(resident.id) || resident.familyCooldownUntil > view.serverTime;
+    }).sort((left, right) => left.id - right.id);
+    for (const member of candidates) {
+      if (stopped()) return;
+      const resident = view.state.residents.find(item => item.id === member.id);
+      if (!resident || resident.deadAt !== null || resident.away !== null) continue;
+      const room = chooseProductionRoom(resident);
+      if (!room) { log(`自动生育：${resident.name} 生育完成，暂无生产空位，留在原处等待。`); continue; }
+      if (!await act({ type: 'assign', residentId: resident.id, roomId: room.id })) return;
+      if (view.state.residents.find(item => item.id === resident.id)?.roomId !== room.id) throw new Error('生育父母回岗结果未确认');
+      log(`自动生育：${resident.name} 生育完成，回到${room.floor} 层 ${room.level} 级${roomLabels[room.type] ?? room.type}（房间 ${room.id}）。`);
+    }
+  }
   // 造神计划：自动生育的子代成年后，属性总和未到 70 的优先训练（按总和从高到低排队，
-  // 先练最高的未满属性）；满 70 后再按资源缺口和废料、零件等顺序安排生产岗位。
+  // 先练最高的未满属性）；满 70 后再按资源缺口和零件、废料等顺序安排生产岗位。
   async function assignGrownChildren() {
     const parents = new Set(task.autoParents);
     if (!parents.size) return;
@@ -219,30 +322,13 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         log(`造神计划：${resident.name} 已成年（属性 ${sum}/70），优先训练 ${statLabels[room.trainStat]} → ${room.floor} 层训练室（房间 ${room.id}）。`);
         continue;
       }
-      const model = workforceModel(view);
-      const baseNet = model.net();
-      const rooms = model.rooms.filter(room => room.type !== 'training' && occupied(room.id) < room.width * 2);
-      const deficits = ['power', 'food', 'water'].filter(key => baseNet[key] < 0).sort((left, right) => baseNet[left] - baseNet[right]);
-      const order = [...deficits, 'scrap', 'parts', 'stimpak'];
-      let choice = null;
-      for (const resource of order) {
-        const options = rooms.filter(room => model.types[room.type]?.resource === resource)
-          .map(room => ({ room, net: model.net([{ residentId: resident.id, roomId: room.id }]) }))
-          .filter(item => resource !== 'parts' || item.net.scrap >= 0)
-          .sort((left, right) => right.room.level - left.room.level || right.room.width - left.room.width ||
-            left.room.floor - right.room.floor || left.room.id - right.room.id);
-        if (options.length) { choice = options[0].room; break; }
-      }
-      if (!choice) {
-        choice = rooms.filter(room => room.type === 'radio')
-          .sort((left, right) => right.level - left.level || left.floor - right.floor || left.id - right.id)[0] ?? null;
-      }
+      const choice = chooseProductionRoom(resident);
       if (!choice) { log(`造神计划：${resident.name} 已成年且属性满 70，暂无生产空位，下轮继续。`); continue; }
       if (!await act({ type: 'assign', residentId: resident.id, roomId: choice.id })) return;
       if (view.state.residents.find(item => item.id === resident.id)?.roomId !== choice.id) throw new Error('成年居民安排结果未确认');
       task.autoAssigned.push(resident.id);
       assigned.add(resident.id);
-      log(`造神计划：${resident.name} 已成年且属性满 70，安排到 ${choice.floor} 层${model.types[choice.type]?.name ?? choice.type}（房间 ${choice.id}）。`);
+      log(`造神计划：${resident.name} 已成年且属性满 70，安排到 ${choice.floor} 层${roomLabels[choice.type] ?? choice.type}（房间 ${choice.id}）。`);
     }
   }
   (async () => {
@@ -370,9 +456,14 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
             task.newcomers = task.newcomers.filter(item => item !== id);
           }
           if (stopped()) break;
+          const paused = () => Boolean(task.incidentSnapshot) || view.state.rooms.some(room => room.incident);
+          // 先补电力、食物、净水缺口，再考虑训练和造神转岗，保证资源不因训练抽人转负。
+          if ((godEnabled || task.birthEnabled) && paused()) log('资源补缺：事件处理中，暂停居民调动。');
+          else if (godEnabled || task.birthEnabled) await balanceResources();
+          if (stopped()) break;
           if (godEnabled) {
             // 救援快照归位完成后再调整训练岗位，避免新安排被快照覆盖。
-            if (task.incidentSnapshot || view.state.rooms.some(room => room.incident)) log('造神计划：事件处理中，暂停居民调动。');
+            if (paused()) log('造神计划：事件处理中，暂停居民调动。');
             else {
               const plan = planShelterGod(view);
               log(`造神计划：检查完成，本轮 ${plan.assignments.length} 步调动。`);
@@ -387,13 +478,19 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           if (task.birthEnabled) {
             if (stopped()) break;
             // 与造神计划一致，事件处理或救援站位未归位时暂停居民调动。
-            if (task.incidentSnapshot || view.state.rooms.some(room => room.incident)) log('自动生育：事件处理中，暂停居民调动。');
+            if (paused()) log('自动生育：事件处理中，暂停居民调动。');
             else {
               await autoBirth();
+              if (stopped()) break;
+              await returnParents();
               if (stopped()) break;
               await assignGrownChildren();
             }
           }
+          if (stopped()) break;
+          // 岗位调整完成后统一穿戴装备：按房间需要的属性重新分配服装。
+          if ((godEnabled || task.birthEnabled) && paused()) log('装备分配：事件处理中，暂停换装。');
+          else if (godEnabled || task.birthEnabled) await applyOutfits();
           log(view.state.explorers.length ? `废土检查：${view.state.explorers.length} 名探险者。` : '没有外出探险人员，跳过废土检查。');
           for (const original of [...view.state.explorers]) {
             if (stopped()) break;
