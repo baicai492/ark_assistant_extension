@@ -232,6 +232,16 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       }
     }
   }
+  // 等级调整：同种资源有更高等级的空位时，把低等级房间的居民迁上去。
+  async function upgradeRooms() {
+    const assignments = planRoomUpgrade(view);
+    for (const { residentId, roomId, message } of assignments) {
+      if (stopped()) return;
+      if (!await act({ type: 'assign', residentId, roomId })) return;
+      if (view.state.residents.find(item => item.id === residentId)?.roomId !== roomId) throw new Error('等级调整结果未确认');
+      log(message);
+    }
+  }
   // 自动穿装备：按居民房间需要的属性分配服装，仓库和无岗位需求居民身上的服装可以重新分配。
   async function applyOutfits() {
     const plan = planOutfits(view);
@@ -453,6 +463,8 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     if (stopped()) return;
     await assignGrownChildren();
     if (stopped()) return;
+    await upgradeRooms();
+    if (stopped()) return;
     await applyOutfits();
   }
   (async () => {
@@ -618,6 +630,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           if (stopped()) break;
           // 造神计划和自动生育调动结束后再补一次缺口：配对把居民拉去宿舍后可能出现负收益。
           if ((godEnabled || task.birthEnabled) && !paused()) await balanceResources();
+          if (stopped()) break;
+          // 同种资源有空位时，把低等级房间的居民迁到高等级房间。
+          if ((godEnabled || task.birthEnabled) && !paused()) await upgradeRooms();
           if (stopped()) break;
           // 岗位调整完成后统一穿戴装备：按房间需要的属性重新分配服装。
           if ((godEnabled || task.birthEnabled) && paused()) log('装备分配：事件处理中，暂停换装。');

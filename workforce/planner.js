@@ -156,6 +156,49 @@ function planWorkforce(view) {
     available: workers.length, production: assignedIds.size, training, resting };
 }
 
+// 同种资源的房间出现空位时，把已经在该资源更低等级房间里工作的居民迁到高等级房间：
+// 高等级房间产能更高，迁入后这种资源的总产出上升，不会造成新的缺口。
+// 外出居民的岗位仍占容量，与游戏调动校验一致；正在升级、停电的房间暂时没有产出，不作为迁入目标。
+function planRoomUpgrade(view) {
+  const model = workforceModel(view);
+  const now = view.serverTime;
+  const resourceOf = room => model.types[room.type]?.resource ?? null;
+  const positions = new Map(view.state.residents.map(resident => [resident.id, resident.roomId]));
+  const occupants = roomId => view.state.residents.filter(resident => positions.get(resident.id) === roomId &&
+    resident.deadAt === null && resident.adultAt <= now).length;
+  const assignments = [];
+  for (let step = 0; step < 12; step++) {
+    let best = null;
+    for (const target of model.rooms) {
+      const resource = resourceOf(target);
+      if (!resource || occupants(target.id) >= target.width * 2) continue;
+      for (const worker of view.state.residents) {
+        if (worker.away !== null || worker.deadAt !== null || worker.adultAt > now) continue;
+        const origin = view.state.rooms.find(room => room.id === positions.get(worker.id));
+        if (!origin || origin.id === target.id || resourceOf(origin) !== resource || origin.level >= target.level) continue;
+        // 零件工坊迁入会增加废料消耗，废料会转负时不迁。
+        if (resource === 'parts' && model.net([...assignments, { residentId: worker.id, roomId: target.id }]).scrap < 0) continue;
+        const gain = model.rate(worker, target) - model.rate(worker, origin);
+        if (gain <= 0) continue;
+        // 优先等级差大的迁移，其次选产出提升最大的人，最后按 ID 稳定排序。
+        const score = [target.level - origin.level, gain, -worker.id];
+        if (!best || score[0] > best.score[0] || score[0] === best.score[0] &&
+            (score[1] > best.score[1] || score[1] === best.score[1] && score[2] > best.score[2])) {
+          best = { worker, origin, target, score };
+        }
+      }
+    }
+    if (!best) break;
+    positions.set(best.worker.id, best.target.id);
+    assignments.push({
+      residentId: best.worker.id, roomId: best.target.id,
+      message: `等级调整：${best.worker.name} 从 ${best.origin.floor} 层 ${best.origin.level} 级${model.types[best.origin.type].name}调到 ` +
+        `${best.target.floor} 层 ${best.target.level} 级${model.types[best.target.type].name}（房间 ${best.target.id}）。`
+    });
+  }
+  return assignments;
+}
+
 // 资源补缺：电力、食物、净水出现负收益时，从废料回收站、零件工坊、医务室、电台等
 // 非缺口岗位调出居民补进缺口房间的空位。训练室居民不参与，避免中断训练；
 // 原岗位的资源调出后不能转负。一次最多规划 12 步，由托管逐条执行。
