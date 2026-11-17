@@ -176,6 +176,8 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           if (view.state.residents.find(item => item.id === resident.id)?.roomId !== room.id) throw new Error('自动配对入住结果未确认');
         }
         for (const id of [left.id, right.id]) if (!task.autoParents.includes(id)) task.autoParents.push(id);
+        // 配对后两人已离开生产岗位，生育结束回岗或配对失效后需要重新安排，不再沿用旧记录。
+        task.autoAssigned = task.autoAssigned.filter(id => id !== left.id && id !== right.id);
         // 记录配对宿舍，待产记录出现后由 returnParents 释放父母回岗。
         if (!task.autoPairs.some(pair => pair.ids.includes(left.id) && pair.ids.includes(right.id))) {
           task.autoPairs.push({ roomId: room.id, ids: [left.id, right.id] });
@@ -294,8 +296,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       log(`自动生育：${resident.name} 生育完成，回到${room.floor} 层 ${room.level} 级${roomLabels[room.type] ?? room.type}（房间 ${room.id}）。`);
     }
   }
-  // 只有七项属性全 10 的配对允许留在宿舍生育。宿舍里的成年非全 10 居民
-  // （包括非全 10 的感情配对）调到生产岗位，避免游戏自动配对生出资质不够的孩子。
+  // 宿舍只留给正在配对、已有感情、待产或家庭冷却中的居民。非全 10 的成人
+  // （包括非全 10 的感情配对）不能留在宿舍，避免游戏自动配生出资质不够的孩子；
+  // 全 10 但没配上对的成人也先安排生产岗位，等下一轮有配对对象时再从岗位拉回宿舍。
   async function evictNonGodAdults() {
     const now = view.serverTime;
     const pending = new Set(view.state.births.flatMap(birth => birth.parents));
@@ -305,10 +308,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       if (task.pendingDispatch[resident.id]) return false;
       const room = view.state.rooms.find(item => item.id === resident.roomId);
       if (room?.type !== 'quarters') return false;
-      if (keys.every(key => resident.stats[key] === 10)) return false;
-      // 已待产或处于家庭冷却的父母由 returnParents 送回岗位，避免重复调动。
-      if (pending.has(resident.id) || resident.familyCooldownUntil > now) return false;
-      return !pairing.has(resident.id);
+      // 正在配对或待产/冷却中的居民由自动生育流程处理，避免重复调动。
+      if (pairing.has(resident.id) || pending.has(resident.id) || resident.familyCooldownUntil > now) return false;
+      // 全 10 且已有感情的居民继续留在宿舍培养感情。
+      if (keys.every(key => resident.stats[key] === 10) && resident.romance) return false;
+      return true;
     }).sort((left, right) => left.id - right.id);
     for (const member of candidates) {
       if (stopped()) return;
@@ -316,11 +320,14 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       if (!resident || resident.deadAt !== null || resident.away !== null) continue;
       const room = view.state.rooms.find(item => item.id === resident.roomId);
       if (room?.type !== 'quarters') continue;
+      const god = keys.every(key => resident.stats[key] === 10);
       const choice = chooseProductionRoom(resident);
-      if (!choice) { log(`自动生育：${resident.name} 不是全 10，暂无生产空位，留在宿舍等待。`); continue; }
+      if (!choice) { log(`自动生育：${resident.name} ${god ? '尚未配对' : '不是全 10'}，暂无生产空位，留在宿舍等待。`); continue; }
       if (!await act({ type: 'assign', residentId: resident.id, roomId: choice.id })) return;
-      if (view.state.residents.find(item => item.id === resident.id)?.roomId !== choice.id) throw new Error('非全 10 居民调离宿舍结果未确认');
-      log(`自动生育：${resident.name} 不是全 10，不能留在宿舍生育，安排到 ${choice.floor} 层${roomLabels[choice.type] ?? choice.type}（房间 ${choice.id}）。`);
+      if (view.state.residents.find(item => item.id === resident.id)?.roomId !== choice.id) throw new Error('居民调离宿舍结果未确认');
+      log(god
+        ? `自动生育：${resident.name} 尚未配对，先安排到 ${choice.floor} 层${roomLabels[choice.type] ?? choice.type}（房间 ${choice.id}）。`
+        : `自动生育：${resident.name} 不是全 10，不能留在宿舍生育，安排到 ${choice.floor} 层${roomLabels[choice.type] ?? choice.type}（房间 ${choice.id}）。`);
     }
   }
   // 已经建立感情关系但被调到不同宿舍的两人，重新安排到同一间宿舍继续积累感情；
