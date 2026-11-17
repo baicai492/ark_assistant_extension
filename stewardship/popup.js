@@ -19,6 +19,8 @@ const godEnabled = document.querySelector('#god-enabled');
 const godSection = document.querySelector('#god-section');
 const godStatus = document.querySelector('#god-status');
 const godParents = document.querySelector('#god-parents');
+const birthEnabled = document.querySelector('#birth-enabled');
+const birthSection = document.querySelector('#birth-section');
 const toggle = document.querySelector('#toggle');
 const status = document.querySelector('#status');
 const logs = document.querySelector('#logs');
@@ -32,8 +34,9 @@ function updateOptions() {
   if (!rescueEnabled.checked) rescueSection.open = false;
   if (!dismissNewcomers.checked) dismissSection.open = false;
   if (!godEnabled.checked) godSection.open = false;
+  if (!birthEnabled.checked) birthSection.open = false;
 }
-for (const [section, checkbox] of [[rescueSection, rescueEnabled], [dismissSection, dismissNewcomers], [godSection, godEnabled]]) {
+for (const [section, checkbox] of [[rescueSection, rescueEnabled], [dismissSection, dismissNewcomers], [godSection, godEnabled], [birthSection, birthEnabled]]) {
   section.querySelector('summary').addEventListener('click', event => {
     // 标题点击交给勾选框处理，由 change 事件统一联动展开与收起。
     if (event.target.tagName === 'SPAN' && !checkbox.disabled) {
@@ -53,7 +56,7 @@ godEnabled.addEventListener('change', () => {
 updateOptions();
 async function refreshGodParents() {
   godStatus.textContent = '正在读取造神亲本训练情况…';
-  await chrome.scripting.executeScript({ target: { tabId }, files: ['stewardship/god-plan.js'] });
+  await chrome.scripting.executeScript({ target: { tabId }, files: ['workforce/planner.js', 'stewardship/god-plan.js'] });
   const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: async () => {
     const response = await fetch('/api/shelter', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15000) });
     if (!response.ok || response.redirected) throw new Error('读取训练情况失败或登录已失效');
@@ -88,13 +91,13 @@ async function refresh() {
   clearTimeout(polling);
   const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: () => {
     const task = globalThis.__fengbaoShelterAuto;
-    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, godEnabled: task.godEnabled, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
+    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
   } });
   const task = result.result;
   running = Boolean(task?.running);
   toggle.textContent = running ? task.stopRequested ? '正在关闭…' : '关闭' : '开启';
   toggle.disabled = Boolean(task?.stopRequested && running);
-  interval.disabled = recall.disabled = rescueEnabled.disabled = dismissNewcomers.disabled = godEnabled.disabled = running;
+  interval.disabled = recall.disabled = rescueEnabled.disabled = dismissNewcomers.disabled = godEnabled.disabled = birthEnabled.disabled = running;
   if (running) {
     interval.value = task.intervalSeconds; recall.value = task.recallEvents;
     rescueEnabled.checked = task.rescueEnabled; rescueAuto.checked = task.rescueMode === 'auto'; rescueWorkers.checked = task.rescueMode === 'workers'; rescueCount.value = task.rescueCount;
@@ -104,6 +107,8 @@ async function refresh() {
     if (task.dismissStatEnabled) { dismissStatKey.value = task.dismissStatKey; dismissStat.value = task.dismissStat; }
     if (godEnabled.checked !== task.godEnabled) godSection.open = task.godEnabled;
     godEnabled.checked = task.godEnabled;
+    if (birthEnabled.checked !== task.birthEnabled) birthSection.open = task.birthEnabled;
+    birthEnabled.checked = task.birthEnabled;
   }
   updateOptions();
   status.textContent = task?.message ?? '尚未开启托管。';
@@ -130,8 +135,8 @@ settings.addEventListener('submit', async event => {
         task.wake?.();
       } });
     } else {
-      await chrome.scripting.executeScript({ target: { tabId }, files: ['stewardship/god-plan.js', 'stewardship/runner.js'] });
-      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked] });
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['workforce/planner.js', 'stewardship/god-plan.js', 'stewardship/runner.js'] });
+      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked] });
     }
     await refresh();
   } catch (error) { showError(error); toggle.disabled = false; }
