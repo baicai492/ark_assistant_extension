@@ -30,11 +30,15 @@ function workforceModel(view) {
   const roomOrder = (left, right) => right.level - left.level || right.width - left.width ||
     left.floor - right.floor || left.col - right.col || left.id - right.id;
   const operating = room => room.builtAt <= now && room.upgradeAt === null && !room.incident && !room.unpowered;
+  // 本周任务小队成员（进行中、返程中、失败待领取）不参与岗位安排，领取后才回到正常调度。
+  const questTeams = new Set((Array.isArray(state.quests) ? state.quests : [])
+    .flatMap(run => Array.isArray(run.team) ? run.team : []));
   const excluded = [];
   const workers = state.residents.filter(resident => {
     const room = state.rooms.find(item => item.id === resident.roomId);
     // 宿舍中家庭冷却尚未结束的成人参与生产安排，训练室居民仍全部保留。
-    const reason = resident.adultAt > now ? '儿童' : !atHome(resident) ? '外出或已倒下' :
+    const reason = questTeams.has(resident.id) ? '本周任务小队' :
+      resident.adultAt > now ? '儿童' : !atHome(resident) ? '外出或已倒下' :
       room?.type === 'training' ? '训练室居民（含暂停、练满）' :
       room?.type === 'quarters' && !(resident.familyCooldownUntil > now) ? '宿舍居民（未处于家庭冷却）' : '';
     if (reason) excluded.push({ id: resident.id, name: resident.name, reason });
@@ -163,6 +167,8 @@ function planRoomUpgrade(view) {
   const model = workforceModel(view);
   const now = view.serverTime;
   const resourceOf = room => model.types[room.type]?.resource ?? null;
+  const questTeams = new Set((Array.isArray(view.state.quests) ? view.state.quests : [])
+    .flatMap(run => Array.isArray(run.team) ? run.team : []));
   const positions = new Map(view.state.residents.map(resident => [resident.id, resident.roomId]));
   const occupants = roomId => view.state.residents.filter(resident => positions.get(resident.id) === roomId &&
     resident.deadAt === null && resident.adultAt <= now).length;
@@ -173,7 +179,7 @@ function planRoomUpgrade(view) {
       const resource = resourceOf(target);
       if (!resource || occupants(target.id) >= target.width * 2) continue;
       for (const worker of view.state.residents) {
-        if (worker.away !== null || worker.deadAt !== null || worker.adultAt > now) continue;
+        if (worker.away !== null || worker.deadAt !== null || worker.adultAt > now || questTeams.has(worker.id)) continue;
         const origin = view.state.rooms.find(room => room.id === positions.get(worker.id));
         if (!origin || origin.id === target.id || resourceOf(origin) !== resource || origin.level >= target.level) continue;
         // 零件工坊迁入会增加废料消耗，废料会转负时不迁。
@@ -213,6 +219,8 @@ function planResourceBalance(view) {
   const atHome = resident => resident.away === null && resident.deadAt === null && resident.adultAt <= now;
   const positions = new Map(view.state.residents.filter(atHome).map(resident => [resident.id, resident.roomId]));
   const resourceOf = room => types[room.type]?.resource ?? null;
+  const questTeams = new Set((Array.isArray(view.state.quests) ? view.state.quests : [])
+    .flatMap(run => Array.isArray(run.team) ? run.team : []));
   const occupants = room => view.state.residents.filter(resident => resident.deadAt === null && resident.adultAt <= now &&
     (positions.get(resident.id) ?? resident.roomId) === room.id).length;
   // 调出优先废料回收站（废料通常富余），其次医务室、电台，最后才是零件工坊。
@@ -232,7 +240,7 @@ function planResourceBalance(view) {
     };
     const same = (left, right) => left.every((value, index) => value === right[index]);
     for (const resident of view.state.residents) {
-      if (!atHome(resident)) continue;
+      if (!atHome(resident) || questTeams.has(resident.id)) continue;
       const origin = roomById.get(positions.get(resident.id));
       if (!origin) continue;
       const originResource = resourceOf(origin);
