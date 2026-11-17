@@ -7,7 +7,11 @@ function planShelterGod(view) {
   const production = { str: ['power'], per: ['water'], agi: ['diner'], int: ['workshop', 'medbay'], end: ['scrap'], cha: ['radio'], lck: [] };
   const names = { power: '发电站', water: '净水站', diner: '餐厅', workshop: '零件工坊', medbay: '医务室', scrap: '废料回收站', radio: '电台' };
   const total = resident => keys.reduce((sum, key) => sum + resident.stats[key], 0);
-  const workers = residents.filter(resident => resident.away === null && resident.deadAt === null && resident.adultAt <= now);
+  // 本周任务小队成员（进行中、返程中、失败待领取）不参与造神计划调动，领取后才回到正常调度。
+  const questTeams = new Set((Array.isArray(view.state.quests) ? view.state.quests : [])
+    .flatMap(run => Array.isArray(run.team) ? run.team : []));
+  const workers = residents.filter(resident => resident.away === null && resident.deadAt === null &&
+    resident.adultAt <= now && !questTeams.has(resident.id));
   const positions = new Map(workers.map(resident => [resident.id, resident.roomId]));
   const assignments = [], parents = [];
   const roomName = room => `${room.type === 'training' ? `${labels[room.trainStat]}训练室` : names[room.type]}（${room.floor} 层，房间 ${room.id}）`;
