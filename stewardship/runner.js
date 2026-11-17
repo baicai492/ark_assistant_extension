@@ -187,8 +187,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   // 再废料回收站、医务室，最后电台。
   function chooseProductionRoom(resident) {
     const model = workforceModel(view);
+    // 与游戏调动校验一致：房间内未倒下的成人占位（外出居民的岗位也保留）。
     const occupied = roomId => view.state.residents.filter(item => item.roomId === roomId && item.deadAt === null &&
-      item.away === null && item.adultAt <= view.serverTime).length;
+      item.adultAt <= view.serverTime).length;
     const rooms = model.rooms.filter(room => room.type !== 'training' && occupied(room.id) < room.width * 2);
     const net = model.net();
     const deficits = ['power', 'food', 'water'].filter(key => net[key] < 0).sort((left, right) => net[left] - net[right]);
@@ -363,7 +364,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     const assigned = new Set(task.autoAssigned);
     const total = resident => keys.reduce((sum, key) => sum + resident.stats[key], 0);
     const occupied = roomId => view.state.residents.filter(item => item.roomId === roomId && item.deadAt === null &&
-      item.away === null && item.adultAt <= view.serverTime).length;
+      item.adultAt <= view.serverTime).length;
     function trainingRoom(resident) {
       return view.state.rooms.filter(room => room.type === 'training' && room.builtAt <= view.serverTime &&
           room.upgradeAt === null && !room.incident && !room.unpowered && keys.includes(room.trainStat) &&
