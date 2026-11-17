@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>一键托管</title><link rel="stylesheet" href="../module.css"><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <h1>一键托管<button class="help-button" type="button" aria-label="一键托管说明" title="每轮按顺序刷新避难所数据、全部收取、事件处理、新人改名、造神计划、废土检查。&#10;&#10;事件救援默认不勾选，勾选后可展开，默认选择专人专救；一键救援次数默认为 3 次。专人专救：变异鼠、掠夺者、深层野兽调用发电站和武器工坊居民，灭火、堵漏调用餐厅居民。专人专救只调用无事件房间中在家存活的成人，按事件房间空位调入。无事件无快照时直接继续；有事件无快照时保存站位并按所选方式救援；有事件有快照时继续后续步骤；无事件有快照时恢复在家存活成人的站位并清除快照。关闭事件救援时暂停救援和归位，已有快照保留到再次启用。&#10;&#10;有电台时检查门外新成人：按最高属性简称及三位编号改名，改名后保持门外，不安排房间。首次开启也检查门外无父母的成人，之后按新增居民识别。&#10;&#10;新人遣散默认不勾选，勾选后可展开，默认选择指定属性，耐力低于 4 则遣散，也可改选总属性条件。仅处理本次开启托管后新出现的电台门外成人，七项基础属性包含幸运；已有居民不遣散。严格低于所选阈值才遣散，等于阈值保留。&#10;&#10;废土只接管已有单人探险，不开启新探险或每周任务。事件次数不含初始出发日志，达到阈值后召回；到家领取后先检查居民血量，低于 60% 时使用一次治疗针，再按原居民、区域、出发治疗针数量及深渊设置再次派出（深渊会按游戏规则再次消耗汽水）。无探险时跳过；治疗针不足时等待，其他失败停止并记录原因。&#10;&#10;关闭扩展面板后继续运行；关闭托管后不再发出新操作，正在提交的请求会完成。托管期间请勿手动调动居民。日志保留最近 2000 条。">?</button></h1>
+  <form id="settings">
+    <label for="interval">检查间隔（秒）<input id="interval" type="number" min="1" step="1" value="300" required></label>
+    <label for="recall-events">废土触发事件后召回（次）<input id="recall-events" type="number" min="1" step="1" value="6" required></label>
+    <details id="rescue-section" class="feature">
+      <summary><input id="rescue-enabled" type="checkbox" aria-label="启用事件救援"><span>事件救援</span></summary>
+      <fieldset id="rescue-options" class="feature-options" aria-label="事件救援方式" disabled>
+        <div class="option-row"><label><input id="rescue-mode-auto" type="radio" name="rescue-mode" value="auto">一键救援</label><input id="rescue-count" type="number" aria-label="一键救援次数" min="1" step="1" value="3" required disabled><span>次</span></div>
+        <div class="option-row"><label><input id="rescue-mode-workers" type="radio" name="rescue-mode" value="workers" checked>专人专救</label><button class="help-button" type="button" aria-label="专人专救说明" title="变异鼠、掠夺者、深层野兽，调用发电站和武器工坊的人去救援&#10;灭火、堵漏，调用餐厅的人去救援">?</button></div>
+      </fieldset>
+    </details>
+    <details id="dismiss-section" class="feature">
+      <summary><input id="dismiss-newcomers-enabled" type="checkbox" aria-label="启用新人遣散"><span>新人遣散</span></summary>
+      <fieldset id="dismiss-options" class="feature-options" aria-label="新人遣散条件" disabled>
+        <div class="option-row"><label><input id="dismiss-enabled" type="radio" name="dismiss-mode" value="total">总属性低于</label><input id="dismiss-total" type="number" aria-label="总属性遣散阈值" min="1" max="70" step="1" value="20" placeholder="输入阈值" required disabled><span>则遣散</span></div>
+        <label><input id="dismiss-stat-enabled" type="radio" name="dismiss-mode" value="stat" checked>指定属性</label>
+        <div class="dismiss-stat-rule">
+          <select id="dismiss-stat-key" aria-label="遣散判断属性" required disabled>
+            <option value="" disabled>选择属性</option>
+            <option value="str">力量</option>
+            <option value="per">感知</option>
+            <option value="end" selected>耐力</option>
+            <option value="cha">魅力</option>
+            <option value="int">智力</option>
+            <option value="agi">敏捷</option>
+            <option value="lck">幸运</option>
+          </select>
+          <span>低于</span><input id="dismiss-stat" type="number" aria-label="指定属性遣散阈值" min="1" max="10" step="1" value="4" placeholder="输入 X" required disabled><span>则遣散</span>
+        </div>
+        <p class="warning">遣散后无法找回。</p>
+      </fieldset>
+    </details>
+    <details id="god-section" class="feature">
+      <summary><input id="god-enabled" type="checkbox" aria-label="启用造神计划"><span>造神计划</span><button class="help-button" type="button" aria-label="造神计划说明" title="仅检查训练室内在家、存活的成人。名字含 ★ 的居民为造神亲本。当前训练属性达到 10 后，按其余未满属性从高到低寻找对应训练室，不存在或已满则继续找；都没有则去休息。&#10;&#10;其他居民当前训练属性达到 10 后，遍历所有对应生产房间，从全部在岗员工中选择该属性低于 10 的最高者交换，先去休息腾位。力量→发电站，感知→净水站，敏捷→餐厅，智力→工坊、医务室，耐力→废料回收站，魅力→电台。幸运满 10 或没有可交换员工时去休息。&#10;&#10;勾选后读取亲本当前基础属性及本级训练进度，之后随托管循环更新；下一站按当前空位预估。存在事件或救援站位快照时暂停造神调动，归位完成后继续。">?</button></summary>
+      <section class="feature-options" aria-label="造神亲本训练情况">
+        <p id="god-status" class="hint" role="status">勾选后读取造神亲本训练情况。</p>
+        <ul id="god-parents" aria-label="造神亲本训练进度"></ul>
+      </section>
+    </details>
+    <div class="actions"><button id="toggle" disabled>开启</button></div>
+  </form>
+  <p id="status" role="status" aria-live="polite">正在连接页面…</p>
+  <p class="warning">刷新或关闭游戏网页会停止托管，并清除日志。</p>
+  <label for="logs">运行日志</label>
+  <textarea id="logs" readonly aria-label="托管运行日志" placeholder="开启后记录事件、新居民和废土处理结果"></textarea>
+  <script src="popup.js"></script>
+</body>
+</html>

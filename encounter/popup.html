@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>奇遇循环</title>
+  <link rel="stylesheet" href="../module.css">
+</head>
+<body>
+  <h1>奇遇循环<button class="help-button" type="button" aria-label="奇遇循环说明" title="寻找奇遇 → 第一个选项 → 等待 → 重复&#10;&#10;初始按钮与奇遇选项均按设置重试，等待超时即停止。关闭此面板仍会运行；刷新或关闭网页后停止。">?</button></h1>
+  <form id="settings">
+    <label>检查间隔 / 秒 <input id="waitSec" type="number" min="0.1" step="0.1" value="5" required></label>
+    <label>最多检查次数 <input id="maxRetries" type="number" min="1" step="1" value="20" required></label>
+    <label>每轮结束等待 / 秒 <input id="cycleSec" type="number" min="0.1" step="0.1" value="360" required></label>
+    <div class="actions"><button id="start" type="submit" disabled>开始</button><button id="stop" type="button" disabled>停止</button></div>
+  </form>
+  <p id="status" role="status">连接页面中…</p>
+  <script src="popup.js"></script>
+</body>
+</html>
+

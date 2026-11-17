@@ -1,0 +1,13 @@
+body { max-height: 400px; overflow-y: auto; padding: 14px; }
+h1 { margin-bottom: 6px; }
+p { margin: 8px 0; }
+.actions { margin: 12px 0; }
+.actions button { padding: 10px 6px; }
+button[aria-pressed="true"] { background: #604795; }
+#status { padding: 8px 10px; }
+#residents { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+#residents > li { padding: 9px 10px; border: 1px solid #e5e0f0; border-radius: 9px; background: #faf9fd; overflow-wrap: anywhere; }
+.resident-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.resident-total { flex-shrink: 0; color: #6c55af; }
+.stats { margin-top: 4px; color: #66738a; font-size: 12px; }
+progress { display: block; width: 100%; height: 10px; margin: 8px 0; accent-color: #8067bc; }

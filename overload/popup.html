@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>速刷关卡</title>
+  <link rel="stylesheet" href="../module.css">
+</head>
+<body>
+  <h1>速刷关卡<button class="help-button" type="button" aria-label="速刷关卡说明" title="每局 5 倍速，按固定 9 步布置，等待自然出兵。胜利返回关卡后继续，体力少于 6 或挑战失败时停止。">?</button></h1>
+  <p class="notice">常用栏前三位必须依次为：<br><strong>石墙卫 → 光环辅助 → 雷电法师</strong></p>
+  <p class="hint">请从关卡选择页启动。常用栏在进入战斗后检查，顺序错误时本局可能已消耗体力。运行时保持游戏标签页在前台，勿同时手动布置。</p>
+  <p><label><input id="autoFocus" type="checkbox"> 定期聚焦游戏标签页（每 30 秒，会置前浏览器窗口）</label></p>
+  <div class="actions">
+    <button id="start" disabled>开始循环</button>
+    <button id="stop" disabled>停止</button>
+  </div>
+  <p id="status" role="status">正在连接页面…</p>
+  <script src="popup.js"></script>
+</body>
+</html>
+

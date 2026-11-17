@@ -1,0 +1,18 @@
+body { max-height: 400px; overflow-y: auto; padding: 14px; }
+h1 { margin-bottom: 6px; }
+p { margin: 8px 0; }
+.actions { margin: 12px 0; }
+#status { padding: 8px 10px; }
+.result-heading, .resident-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.result-heading b { color: #6c55af; font-size: 22px; }
+#pairs, .pair-members { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+#pairs { gap: 14px; }
+.pair-members > li { padding: 9px 10px; border: 1px solid #e5e0f0; border-radius: 9px; background: #faf9fd; }
+.resident-name { overflow-wrap: anywhere; }
+.resident-total { flex-shrink: 0; color: #6c55af; }
+.stats { display: flex; flex-wrap: wrap; gap: 3px 10px; margin-top: 4px; color: #66738a; font-size: 12px; }
+details { margin-top: 12px; border-top: 1px solid #e5e9f1; padding-top: 8px; }
+summary { cursor: pointer; color: #69548f; }
+#excluded-list { margin: 8px 0 0; padding-left: 18px; color: #66738a; font-size: 12px; }
+#excluded-list li { margin: 5px 0; overflow-wrap: anywhere; }
+summary:focus-visible { outline: 2px solid #8873c5; outline-offset: 2px; }
