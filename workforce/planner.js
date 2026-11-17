@@ -137,9 +137,10 @@ function planWorkforce(view) {
     const options = slots.filter(slot => !slot.worker).map(slot => {
       const resource = types[slot.room.type].resource;
       const deficit = ['power', 'food', 'water', 'scrap'].includes(resource) && net[resource] < 0;
-      // 会造成废料亏损的工坊最后补，仍遵循生产房全满才去门外。
-      const scrapDeficit = slot.room.type === 'workshop' && net.scrap - model.rate(worker, slot.room) * 6 < 0;
-      return { slot, priority: deficit ? 0 : scrapDeficit ? 2 : 1 };
+      // 训练无位者优先补生产缺口，其次优先零件工坊；会造成废料亏损的工坊最后补。
+      const scrapLoss = slot.room.type === 'workshop' && net.scrap - model.rate(worker, slot.room) * 6 < 0;
+      const partsFirst = slot.room.type === 'workshop' && !scrapLoss;
+      return { slot, priority: deficit ? 0 : partsFirst ? 1 : scrapLoss ? 3 : 2 };
     }).sort((a, b) => a.priority - b.priority ||
       worker.stats[types[b.slot.room.type].stat] - worker.stats[types[a.slot.room.type].stat] ||
       slots.indexOf(a.slot) - slots.indexOf(b.slot));
@@ -153,4 +154,61 @@ function planWorkforce(view) {
   }
   return { assignments, expected: model.net(assignments), excluded: model.excluded,
     available: workers.length, production: assignedIds.size, training, resting };
+}
+
+// 资源补缺：电力、食物、净水出现负收益时，从废料回收站、零件工坊、医务室、电台等
+// 非缺口岗位调出居民补进缺口房间的空位。训练室居民不参与，避免中断训练；
+// 原岗位的资源调出后不能转负。一次最多规划 12 步，由托管逐条执行。
+function planResourceBalance(view) {
+  const model = workforceModel(view);
+  if (!Array.isArray(view?.state?.births)) throw new Error('避难所数据格式已变化');
+  const deficitsKeys = ['power', 'food', 'water'];
+  const now = view.serverTime;
+  const types = model.types;
+  const rooms = model.rooms;
+  const roomById = new Map(view.state.rooms.map(room => [room.id, room]));
+  const atHome = resident => resident.away === null && resident.deadAt === null && resident.adultAt <= now;
+  const positions = new Map(view.state.residents.filter(atHome).map(resident => [resident.id, resident.roomId]));
+  const resourceOf = room => types[room.type]?.resource ?? null;
+  const occupants = room => view.state.residents.filter(resident => atHome(resident) && positions.get(resident.id) === room.id).length;
+  // 按调出损失从小到大的岗位顺序：废料、零件、医务室，电台最后。
+  const originOrder = { scrap: 0, workshop: 1, medbay: 2, radio: 3 };
+  const assignments = [];
+  for (let step = 0; step < 12; step++) {
+    const net = model.net(assignments);
+    const deficits = deficitsKeys.filter(key => net[key] < 0).sort((left, right) => net[left] - net[right]);
+    if (!deficits.length) break;
+    let best = null;
+    for (const resident of view.state.residents) {
+      if (!atHome(resident)) continue;
+      const origin = roomById.get(positions.get(resident.id));
+      if (!origin) continue;
+      const originResource = resourceOf(origin);
+      // 只从非缺口资源岗位调人，训练室、宿舍等没有资源产出的岗位不动。
+      if (!originResource || deficitsKeys.includes(originResource)) continue;
+      const loss = model.rate(resident, origin);
+      // 调出后原岗位的资源仍不能为负。
+      if (net[originResource] - loss < 0) continue;
+      for (const resource of deficits) {
+        for (const room of rooms.filter(room => resourceOf(room) === resource && occupants(room) < room.width * 2)) {
+          const gain = model.rate(resident, room);
+          if (gain <= 0) continue;
+          const score = [gain, -(originOrder[origin.type] ?? 9), -loss];
+          if (!best || score[0] > best.score[0] ||
+              score[0] === best.score[0] && (score[1] > best.score[1] ||
+                score[1] === best.score[1] && (score[2] > best.score[2] ||
+                  score[2] === best.score[2] && resident.id < best.resident.id))) {
+            best = { resident, origin, room, score };
+          }
+        }
+      }
+    }
+    if (!best) break;
+    positions.set(best.resident.id, best.room.id);
+    assignments.push({
+      residentId: best.resident.id, roomId: best.room.id,
+      message: `资源补缺：${best.resident.name} 从${types[best.origin.type]?.name ?? best.origin.type}调到${types[best.room.type]?.name}（房间 ${best.room.id}）。`
+    });
+  }
+  return assignments;
 }
