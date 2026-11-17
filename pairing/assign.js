@@ -8,6 +8,8 @@ function startDormAssignment(pairs) {
   (async () => {
     let view;
     const keys = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'];
+    // 游戏规则：6 人宿舍可同时安排两组生育，1 格宿舍只能一组。
+    const MAX_PAIRS_PER_ROOM = 2;
     function updateView(data) {
       if (!Array.isArray(data?.state?.rooms) || !Array.isArray(data.state.residents) || !Array.isArray(data.state.births) ||
           !Number.isFinite(data.serverTime)) throw new Error('游戏返回的数据格式已变化');
@@ -16,7 +18,14 @@ function startDormAssignment(pairs) {
     function occupants(roomId) {
       // 儿童不能调动，也不占成人名额；清理和入住校验只统计成人。
       return view.state.residents.filter(resident => resident.roomId === roomId && resident.deadAt === null &&
-        resident.adultAt <= view.serverTime);
+        resident.away === null && resident.adultAt <= view.serverTime);
+    }
+    function hasPartner(resident, list) {
+      return Boolean(resident.romance) && list.some(item => item.id === resident.romance.partnerId);
+    }
+    function pairsInRoom(roomId) {
+      const list = occupants(roomId);
+      return list.filter(resident => hasPartner(resident, list)).length / 2;
     }
     function checkPair(ids) {
       const members = ids.map(id => view.state.residents.find(resident => resident.id === id));
@@ -27,8 +36,12 @@ function startDormAssignment(pairs) {
           throw new Error(`居民「${resident.name ?? resident.id}」的数据不完整`);
         }
         if (resident.adultAt > view.serverTime || resident.away !== null || resident.deadAt !== null ||
-            (resident.romance && view.state.rooms.some(room => room.id === resident.roomId && room.type === 'quarters')) || resident.familyCooldownUntil > view.serverTime) {
+            (resident.romance && view.state.rooms.some(room => room.id === resident.roomId && room.type === 'quarters')) ||
+            resident.familyCooldownUntil > view.serverTime) {
           throw new Error(`「${resident.name}」当前无法调动配对，请重新计算或等待其状态恢复`);
+        }
+        if (view.state.births.some(birth => birth.parents.includes(resident.id))) {
+          throw new Error(`「${resident.name}」有孩子待出生，暂不能调动`);
         }
       }
       const [left, right] = members;
@@ -72,39 +85,58 @@ function startDormAssignment(pairs) {
       if (dorms.some(room => !['id', 'level', 'floor', 'col', 'width', 'builtAt'].every(key => Number.isFinite(room[key])))) {
         throw new Error('宿舍数据不完整，无法按等级安排');
       }
-      // 合并的多人宿舍也只使用一次；升级中的宿舍按当前等级参与排序，与游戏下拉框一致。
-      // 与游戏的宿舍待产标记一致，按待产记录的 roomId 判断，父母离开也仍然跳过。
-      const available = dorms.filter(room => room.builtAt <= view.serverTime && !room.incident &&
-        !view.state.births.some(birth => birth.roomId === room.id) &&
-        !occupants(room.id).some(resident => resident.romance))
+      // 合并的多人宿舍也只使用一次；升级中的宿舍暂不能入住，与游戏选择房间的校验一致。
+      const available = dorms.filter(room => room.builtAt <= view.serverTime && room.upgradeAt === null && !room.incident)
         .sort((left, right) => right.level - left.level || left.floor - right.floor || left.col - right.col || left.id - right.id);
-      if (!available.length) throw new Error('没有可用宿舍（待产、培养感情中、未建好或发生事故的宿舍已跳过）');
+      if (!available.length) throw new Error('没有可用宿舍（施工、升级或发生事故的宿舍已跳过）');
       const ordered = pairs.map(pair => ({ ids: pair.map(resident => resident.id), total: pair[0].total + pair[1].total }))
         .sort((left, right) => right.total - left.total);
-      const plan = ordered.slice(0, available.length).map((pair, index) => ({ ...pair, room: available[index] }));
+      // 待产父母不能移动，保留在房间内并计入成人容量；其他未配对成人可以移到门外腾位。
+      const pendingParents = new Set(view.state.births.flatMap(birth => birth.parents));
+      function protectedAdults(roomId) {
+        const list = occupants(roomId);
+        return list.filter(resident => hasPartner(resident, list) || pendingParents.has(resident.id)).length;
+      }
+      // 一个 6 人宿舍最多同时放两组；已有感情或待产的宿舍按剩余组数安排，成人容量另算。
+      const plan = [];
+      for (const pair of ordered) {
+        const room = available.find(candidate => {
+          const placed = plan.filter(item => item.room.id === candidate.id).length;
+          return pairsInRoom(candidate.id) + placed < Math.min(MAX_PAIRS_PER_ROOM, candidate.width) &&
+            protectedAdults(candidate.id) + (placed + 1) * 2 <= candidate.width * 2;
+        });
+        if (!room) break;
+        plan.push({ ...pair, room });
+      }
       // 先校验本批所有配对，再开始调动；保留计算出来的组合，不临时换人。
       for (const item of plan) checkPair(item.ids);
 
-      // 先移走全部目标宿舍的原有成人，保留儿童，避免成人之间临时混住。
-      for (const { room } of plan) {
-        for (const resident of occupants(room.id)) await moveResident(resident.id, null);
+      // 只移走本批要使用的宿舍里的未配对成人；已有伴侣和待产父母原地保留。
+      for (const room of [...new Set(plan.map(item => item.room.id))].map(id => view.state.rooms.find(item => item.id === id))) {
+        for (const resident of occupants(room.id)) {
+          if (hasPartner(resident, occupants(room.id)) || pendingParents.has(resident.id)) continue;
+          await moveResident(resident.id, null);
+        }
       }
       for (const { ids, room } of plan) {
         const members = checkPair(ids);
         const currentRoom = view.state.rooms.find(item => item.id === room.id);
-        if (!currentRoom || currentRoom.type !== 'quarters' || currentRoom.incident ||
-            currentRoom.builtAt > view.serverTime || occupants(room.id).length) {
+        if (!currentRoom || currentRoom.type !== 'quarters' || currentRoom.incident || currentRoom.upgradeAt !== null ||
+            currentRoom.builtAt > view.serverTime ||
+            pairsInRoom(room.id) >= Math.min(MAX_PAIRS_PER_ROOM, room.width) ||
+            occupants(room.id).length + 2 > room.width * 2) {
           throw new Error(`${room.floor} 层宿舍状态已变化，停止安排`);
         }
         for (const id of ids) await moveResident(id, room.id);
         const actual = occupants(room.id);
-        if (actual.length !== 2 || !ids.every(id => actual.some(resident => resident.id === id))) {
+        if (!ids.every(id => actual.some(resident => resident.id === id))) {
           throw new Error(`${room.floor} 层宿舍入住结果不符，请检查游戏页面`);
         }
-        task.completed.push(`${members.map(resident => resident.name).join(' ＋ ')} → ${room.floor} 层 ${room.level} 级宿舍${room.width > 1 ? ` ×${room.width}` : ''}（房间 ${room.id}）`);
+        const group = plan.filter(item => item.room.id === room.id).findIndex(item => item.ids === ids) + 1;
+        task.completed.push(`${members.map(resident => resident.name).join(' ＋ ')} → ${room.floor} 层 ${room.level} 级宿舍（房间 ${room.id}）第 ${group} 组`);
       }
       const remaining = pairs.length - plan.length;
-      task.message = `已安排 ${plan.length} 对，每间宿舍仅一对成人，儿童保留原处。${remaining ? `\n可用宿舍不足，剩余 ${remaining} 对未安排。` : ''}\n游戏画面如未更新，请刷新查看。`;
+      task.message = `已安排 ${plan.length} 对；6 人宿舍最多同时两组，已有感情或待产的宿舍按剩余组数安排。${remaining ? `\n可用组数不足，剩余 ${remaining} 对未安排。` : ''}\n儿童保留原处，未配对成人已移到门外。游戏画面如未更新，请刷新查看。`;
     } catch (error) {
       // 保留已完成的真实结果，失败后不继续，也不自动重试未知结果的请求。
       task.message = `安排已停止：${error.message}\n已完成 ${task.completed.length} 对，已确认调动 ${task.moved} 人次。请检查游戏页面后重新计算。`;

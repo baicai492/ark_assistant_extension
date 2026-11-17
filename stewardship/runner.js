@@ -1,4 +1,4 @@
-function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, rescueCount, rescueEnabled, rescueMode, godEnabled) {
+function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, rescueCount, rescueEnabled, rescueMode, godEnabled, birthEnabled) {
   const previous = globalThis.__fengbaoShelterAuto;
   if (previous?.running) return;
   if (!Number.isInteger(intervalSeconds) || intervalSeconds < 1 || !Number.isInteger(recallEvents) || recallEvents < 1) throw new Error('间隔和事件次数必须为正整数');
@@ -6,37 +6,85 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   if (rescueEnabled && rescueMode === 'auto' && (!Number.isInteger(rescueCount) || rescueCount < 1)) throw new Error('救援次数必须为正整数');
   if (dismissEnabled && (!Number.isInteger(dismissTotal) || dismissTotal < 1 || dismissTotal > 70)) throw new Error('遣散阈值必须为 1–70 的整数');
   const statLabels = { str: '力量', per: '感知', end: '耐力', cha: '魅力', int: '智力', agi: '敏捷', lck: '幸运' };
+  const keys = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'];
   if (dismissStatEnabled && !Object.hasOwn(statLabels, dismissStatKey)) throw new Error('请选择单项遣散的指定属性');
   if (dismissStatEnabled && (!Number.isInteger(dismissStat) || dismissStat < 1 || dismissStat > 10)) throw new Error('单项属性遣散阈值必须为 1–10 的整数');
-  const task = { running: true, stopRequested: false, intervalSeconds, rescueEnabled, rescueMode, rescueCount, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, godEnabled, logs: previous?.logs ?? [], message: '正在开启托管…', nextAt: null, pendingDispatch: previous?.pendingDispatch ?? {}, newcomers: previous?.newcomers ?? [], knownIds: previous?.knownIds ?? null, deployments: previous?.deployments ?? {} };
+  const task = { running: true, stopRequested: false, intervalSeconds, rescueEnabled, rescueMode, rescueCount, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, godEnabled, birthEnabled: Boolean(birthEnabled), logs: previous?.logs ?? [], message: '正在开启托管…', nextAt: null, pendingDispatch: previous?.pendingDispatch ?? {}, newcomers: previous?.newcomers ?? [], knownIds: previous?.knownIds ?? null, deployments: previous?.deployments ?? {}, autoParents: previous?.autoParents ?? [], autoAssigned: previous?.autoAssigned ?? [] };
   task.incidentSnapshot = previous?.incidentSnapshot ?? null;
   globalThis.__fengbaoShelterAuto = task;
   const log = message => { task.logs.push(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${message}`); if (task.logs.length > 2000) task.logs.shift(); task.message = message; };
   const stopped = () => task.stopRequested;
+  const fatal = message => Object.assign(new Error(message), { fatal: true });
+  const stopError = () => Object.assign(new Error('托管已停止'), { stopped: true });
   const wait = ms => new Promise(resolve => { task.wake = resolve; task.timer = setTimeout(resolve, ms); });
   let view;
+  function assertView(data) {
+    if (!Array.isArray(data?.state?.residents) || !Array.isArray(data.state.rooms) ||
+        !Array.isArray(data.state.births) || !Array.isArray(data.state.explorers) || !Number.isFinite(data.serverTime)) {
+      throw fatal('避难所数据格式已变化');
+    }
+  }
+  // 网络超时、服务端 5xx 和未确认结果都只算本轮失败：同一批操作复用同一个幂等键重试，
+  // 三次仍失败就跳过本轮，托管继续运行，不再因为一次 signal timed out 整体停止。
   async function read() {
-    const response = await fetch('/api/shelter', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15000) });
-    if (!response.ok || response.redirected) throw new Error('读取失败或登录已失效');
-    view = await response.json();
-    if (!Array.isArray(view.state?.residents) || !Array.isArray(view.state.rooms) || !Array.isArray(view.state.explorers)) throw new Error('避难所数据格式已变化');
-    if (view.switches?.frozen) throw new Error('避难所正在维护');
+    let last;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (stopped()) throw stopError();
+      try {
+        const response = await fetch('/api/shelter', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(20000) });
+        if (response.redirected || response.status === 401 || response.status === 403) throw fatal('登录已失效');
+        if (!response.ok) throw new Error(`读取失败（HTTP ${response.status}）`);
+        const data = await response.json().catch(() => { throw new Error('读取失败（返回内容无法解析）'); });
+        assertView(data);
+        if (data.switches?.frozen) throw new Error('避难所正在维护，稍后重试');
+        view = data;
+        return;
+      } catch (error) {
+        if (error.fatal) throw error;
+        last = error;
+        if (attempt < 3) await wait(2000 * attempt);
+      }
+    }
+    throw last;
   }
   async function act(action) {
     if (stopped()) return false;
-    const response = await fetch('/api/shelter/action', { method: 'POST', credentials: 'same-origin', signal: AbortSignal.timeout(15000), headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, idempotencyKey: crypto.randomUUID() }) });
-    if (response.redirected || response.status === 401 || response.status === 403) throw new Error('登录已失效');
-    const data = await response.json();
-    // 未攒满产出是正常等待状态，只跳过本次收取，不中断托管。
-    if (action.type === 'collect_all' && response.status < 500 && data.code !== 'retry' &&
-        /(?:没有|暂无|尚无).{0,12}可收取|(?:还没|尚未|未|没有).{0,6}攒满/.test(data.error || '')) {
-      log(`全部收取已跳过：${data.error}`);
-      await read();
-      return false;
+    // 与游戏页面的重试逻辑一致：同一次操作始终复用同一个幂等键，超时后重试不会重复执行。
+    const idempotencyKey = crypto.randomUUID();
+    let last;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (stopped()) return false;
+      try {
+        const response = await fetch('/api/shelter/action', {
+          method: 'POST', credentials: 'same-origin', signal: AbortSignal.timeout(20000),
+          headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, idempotencyKey })
+        });
+        if (response.redirected || response.status === 401 || response.status === 403) throw fatal('登录已失效');
+        if (response.status >= 500) throw new Error(`操作未确认（HTTP ${response.status}）`);
+        const data = await response.json().catch(() => ({}));
+        // 未攒满产出是正常等待状态，只跳过本次收取，不中断托管。
+        if (action.type === 'collect_all' && response.status < 500 && data.code !== 'retry' &&
+            /(?:没有|暂无|尚无).{0,12}可收取|(?:还没|尚未|未|没有).{0,6}攒满/.test(data.error || '')) {
+          log(`全部收取已跳过：${data.error}`);
+          await read();
+          return false;
+        }
+        if (!response.ok || data.code === 'retry') {
+          const error = new Error(data.error || '操作结果未确认');
+          // 明确的 4xx 业务错误重试也不会成功；其余（5xx、retry）按未知结果重试。
+          error.permanent = response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429 && data.code !== 'retry';
+          throw error;
+        }
+        assertView(data.view);
+        view = data.view;
+        return true;
+      } catch (error) {
+        if (error.fatal || error.permanent) throw error;
+        last = error;
+        if (attempt < 3) await wait(2000 * attempt);
+      }
     }
-    if (!response.ok || data.code === 'retry') throw new Error(data.error || '操作结果未确认');
-    view = data.view;
-    return true;
+    throw new Error(`${last?.message ?? '操作失败'}（已重试 3 次，跳过本轮）`);
   }
   // 出发日志记录原始携带数量，不能使用途中消耗后的 stimpaks 值冒充原配置。
   function deployment(explorer) {
@@ -48,190 +96,360 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     }
     return task.deployments[explorer.id];
   }
+  function adultsIn(roomId) {
+    return view.state.residents.filter(resident => resident.roomId === roomId && resident.deadAt === null &&
+      resident.away === null && resident.adultAt <= view.serverTime);
+  }
+  function hasPartner(resident, list) {
+    return Boolean(resident.romance) && list.some(item => item.id === resident.romance.partnerId);
+  }
+  function pairsInRoom(roomId) {
+    const list = adultsIn(roomId);
+    return list.filter(resident => hasPartner(resident, list)).length / 2;
+  }
+  function related(left, right) {
+    return left.parents.includes(right.id) || right.parents.includes(left.id) ||
+      left.parents.some(id => right.parents.includes(id));
+  }
+  // 与配对面板一致：6 人宿舍可以同时容纳两组生育，1 格宿舍只能一组。
+  function pairCapacity(room) { return Math.min(2, room.width); }
+  function freePairSlots(room) {
+    const list = adultsIn(room.id);
+    // 房内还有未配对的成人时不再安排，避免服务端把新居民和房里的人凑成一对。
+    if (list.some(resident => !hasPartner(resident, list))) return 0;
+    const freeAdults = room.width * 2 - list.length;
+    return Math.max(0, Math.min(pairCapacity(room) - pairsInRoom(room.id), Math.floor(freeAdults / 2)));
+  }
+  // 自动生育：只从全 10 属性、可配对（成年、在家、心情≥50、不在冷却、无亲属关系）的居民中配对，
+  // 放进有空位的宿舍等待服务端每 10 分钟结算感情，感情满后自动待产、出生。
+  // 自动生育的子代按造神计划处理：属性总和未满 70 的优先训练，按总和从高到低排队。
+  async function autoBirth() {
+    const now = view.serverTime;
+    const living = view.state.residents.filter(resident => resident.deadAt === null).length + view.state.births.length;
+    const capacity = Math.min(200, view.state.rooms.filter(room => room.type === 'quarters')
+      .reduce((sum, room) => sum + room.width * (2 + 2 * room.level), 0));
+    if (living >= capacity) { log(`自动生育：人口已满（${living}/${capacity}），本轮不安排新配对。`); return; }
+    const rooms = view.state.rooms.filter(room => room.type === 'quarters' && room.builtAt <= now &&
+      room.upgradeAt === null && !room.incident && ['id', 'level', 'width', 'floor'].every(key => Number.isFinite(room[key])))
+      .sort((left, right) => right.level - left.level || right.width - left.width || left.floor - right.floor || left.id - right.id);
+    const slots = rooms.reduce((sum, room) => sum + freePairSlots(room), 0);
+    if (!slots) { log('自动生育：没有可用宿舍空位。'); return; }
+    const pendingParents = new Set(view.state.births.flatMap(birth => birth.parents));
+    const autoParents = new Set(task.autoParents);
+    const candidates = view.state.residents.filter(resident => {
+      const room = view.state.rooms.find(item => item.id === resident.roomId);
+      return resident.deadAt === null && resident.away === null && resident.adultAt <= now && room?.type !== 'quarters' &&
+        !resident.romance && !(resident.familyCooldownUntil > now) && resident.happiness >= 50 &&
+        !pendingParents.has(resident.id) && keys.every(key => resident.stats[key] === 10) &&
+        // 自动生育的子代成年后去训练/工作岗位，不再次拉回宿舍生育。
+        !(resident.parents.length === 2 && resident.parents.every(id => autoParents.has(id)));
+    }).sort((left, right) => left.id - right.id);
+    const limit = Math.min(slots, capacity - living, Math.floor(candidates.length / 2));
+    const used = new Set();
+    const pairs = [];
+    for (const left of candidates) {
+      if (pairs.length >= limit) break;
+      if (used.has(left.id)) continue;
+      const right = candidates.find(candidate => !used.has(candidate.id) && candidate.id !== left.id && !related(left, candidate));
+      if (!right) continue;
+      used.add(left.id);
+      used.add(right.id);
+      pairs.push([left, right]);
+    }
+    if (!pairs.length) { log('自动生育：没有可用的全属性 10 配对。'); return; }
+    for (const room of rooms) {
+      let free = freePairSlots(room);
+      while (free > 0 && pairs.length) {
+        if (stopped()) return;
+        const [left, right] = pairs.shift();
+        for (const member of [left, right]) {
+          const resident = view.state.residents.find(item => item.id === member.id);
+          if (!resident || resident.deadAt !== null || resident.away !== null || resident.adultAt > view.serverTime ||
+              resident.romance || resident.familyCooldownUntil > view.serverTime || resident.happiness < 50) {
+            throw new Error('自动配对的居民状态已变化，跳过本轮');
+          }
+          if (resident.roomId === room.id) continue;
+          if (!await act({ type: 'assign', residentId: resident.id, roomId: room.id })) return;
+          if (view.state.residents.find(item => item.id === resident.id)?.roomId !== room.id) throw new Error('自动配对入住结果未确认');
+        }
+        for (const id of [left.id, right.id]) if (!task.autoParents.includes(id)) task.autoParents.push(id);
+        free--;
+        log(`自动生育：${left.name} ＋ ${right.name} → ${room.floor} 层 ${room.level} 级宿舍（房间 ${room.id}）。`);
+      }
+    }
+  }
+  // 造神计划：自动生育的子代成年后，属性总和未到 70 的优先训练（按总和从高到低排队，
+  // 先练最高的未满属性）；满 70 后再按资源缺口和废料、零件等顺序安排生产岗位。
+  async function assignGrownChildren() {
+    const parents = new Set(task.autoParents);
+    if (!parents.size) return;
+    const assigned = new Set(task.autoAssigned);
+    const total = resident => keys.reduce((sum, key) => sum + resident.stats[key], 0);
+    const occupied = roomId => view.state.residents.filter(item => item.roomId === roomId && item.deadAt === null &&
+      item.away === null && item.adultAt <= view.serverTime).length;
+    function trainingRoom(resident) {
+      return view.state.rooms.filter(room => room.type === 'training' && room.builtAt <= view.serverTime &&
+          room.upgradeAt === null && !room.incident && !room.unpowered && keys.includes(room.trainStat) &&
+          occupied(room.id) < room.width * 2 && resident.stats[room.trainStat] < 10)
+        .sort((left, right) => resident.stats[right.trainStat] - resident.stats[left.trainStat] ||
+          right.level - left.level || right.width - left.width || left.floor - right.floor || left.id - right.id)[0] ?? null;
+    }
+    const children = view.state.residents.filter(resident =>
+      !assigned.has(resident.id) && resident.deadAt === null && resident.away === null && resident.adultAt <= view.serverTime &&
+      resident.parents.length === 2 && resident.parents.every(id => parents.has(id)))
+      .sort((left, right) => total(right) - total(left) || left.id - right.id);
+    for (const member of children) {
+      if (stopped()) return;
+      const resident = view.state.residents.find(item => item.id === member.id);
+      if (!resident || assigned.has(resident.id) || resident.deadAt !== null || resident.away !== null ||
+          resident.adultAt > view.serverTime) continue;
+      const sum = total(resident);
+      const currentRoom = view.state.rooms.find(item => item.id === resident.roomId);
+      if (currentRoom?.type === 'training' && sum < 70 && resident.stats[currentRoom.trainStat] < 10) continue;
+      if (currentRoom && currentRoom.type !== 'training' && !['quarters', 'storage', 'door', 'elevator'].includes(currentRoom.type)) {
+        task.autoAssigned.push(resident.id);
+        assigned.add(resident.id);
+        continue;
+      }
+      if (sum < 70) {
+        const room = trainingRoom(resident);
+        if (!room) { log(`造神计划：${resident.name}（属性 ${sum}/70）暂无训练空位，留在原处等待。`); continue; }
+        if (!await act({ type: 'assign', residentId: resident.id, roomId: room.id })) return;
+        if (view.state.residents.find(item => item.id === resident.id)?.roomId !== room.id) throw new Error('训练安排结果未确认');
+        log(`造神计划：${resident.name} 已成年（属性 ${sum}/70），优先训练 ${statLabels[room.trainStat]} → ${room.floor} 层训练室（房间 ${room.id}）。`);
+        continue;
+      }
+      const model = workforceModel(view);
+      const baseNet = model.net();
+      const rooms = model.rooms.filter(room => room.type !== 'training' && occupied(room.id) < room.width * 2);
+      const deficits = ['power', 'food', 'water'].filter(key => baseNet[key] < 0).sort((left, right) => baseNet[left] - baseNet[right]);
+      const order = [...deficits, 'scrap', 'parts', 'stimpak'];
+      let choice = null;
+      for (const resource of order) {
+        const options = rooms.filter(room => model.types[room.type]?.resource === resource)
+          .map(room => ({ room, net: model.net([{ residentId: resident.id, roomId: room.id }]) }))
+          .filter(item => resource !== 'parts' || item.net.scrap >= 0)
+          .sort((left, right) => right.room.level - left.room.level || right.room.width - left.room.width ||
+            left.room.floor - right.room.floor || left.room.id - right.room.id);
+        if (options.length) { choice = options[0].room; break; }
+      }
+      if (!choice) {
+        choice = rooms.filter(room => room.type === 'radio')
+          .sort((left, right) => right.level - left.level || left.floor - right.floor || left.id - right.id)[0] ?? null;
+      }
+      if (!choice) { log(`造神计划：${resident.name} 已成年且属性满 70，暂无生产空位，下轮继续。`); continue; }
+      if (!await act({ type: 'assign', residentId: resident.id, roomId: choice.id })) return;
+      if (view.state.residents.find(item => item.id === resident.id)?.roomId !== choice.id) throw new Error('成年居民安排结果未确认');
+      task.autoAssigned.push(resident.id);
+      assigned.add(resident.id);
+      log(`造神计划：${resident.name} 已成年且属性满 70，安排到 ${choice.floor} 层${model.types[choice.type]?.name ?? choice.type}（房间 ${choice.id}）。`);
+    }
+  }
   (async () => {
     try {
       if (location.origin !== 'https://game.arkengine.me' || !/^\/shelter\/?$/.test(location.pathname)) throw new Error('请在自己的避难所页面开启');
       if (globalThis.__fengbaoWorkAssignment?.running || globalThis.__fengbaoDormAssignment?.running || globalThis.__fengbaoResidentRename?.running) throw new Error('其他居民任务正在运行，请等待完成');
-      await read();
-      // 首次开启纳入门外无父母的成人；之后以新增 ID 识别电台新居民，不碰原岗位。
-      if (!task.knownIds) {
-        task.knownIds = view.state.residents.map(resident => resident.id);
-        if (view.state.rooms.some(room => room.type === 'radio')) task.newcomers = view.state.residents.filter(resident => resident.roomId === null && resident.away === null && resident.deadAt === null && resident.adultAt <= view.serverTime && resident.parents.length === 0).map(resident => resident.id);
-      }
-      // 每次开启重新记录已有名单，停用期间到来的居民也不参与自动遣散。
-      task.knownIds = view.state.residents.map(resident => resident.id);
-      log(`托管开启：每 ${intervalSeconds} 秒检查，废土 ${recallEvents} 次事件召回。`);
+      let greeted = false, roundError = false;
       while (!stopped()) {
-        // 与页面右上角刷新、全部收取按钮使用相同接口，不刷新整张网页。
-        await read();
-        if (stopped()) break;
-        await act({ type: 'collect_all' });
-        if (stopped()) break;
-        const incident = view.state.rooms.find(room => room.incident);
-        if (rescueEnabled && !incident && task.incidentSnapshot) {
-          log('事件已结束，正在按快照恢复居民站位。');
-          const pending = task.incidentSnapshot.filter(({ residentId, roomId }) => {
-            const resident = view.state.residents.find(item => item.id === residentId);
-            return resident && resident.away === null && resident.deadAt === null && resident.adultAt <= view.serverTime && resident.roomId !== roomId;
-          });
-          // 先腾出被调动者的现岗位，再恢复原位，避免满房间之间互相占位。
-          for (const { residentId, roomId } of pending) {
-            if (stopped()) break;
-            const resident = view.state.residents.find(item => item.id === residentId);
-            if (resident.roomId === null || resident.roomId === roomId) continue;
-            if (!await act({ type: 'assign', residentId, roomId: null })) break;
-            if (view.state.residents.find(item => item.id === residentId)?.roomId !== null) throw new Error('事件恢复腾位结果未确认');
-          }
-          for (const { residentId, roomId } of pending) {
-            if (stopped()) break;
-            if (view.state.residents.find(item => item.id === residentId).roomId === roomId) continue;
-            if (!await act({ type: 'assign', residentId, roomId })) break;
-            if (view.state.residents.find(item => item.id === residentId)?.roomId !== roomId) throw new Error('事件站位恢复结果未确认');
-          }
+        try {
+          // 与页面右上角刷新、全部收取按钮使用相同接口，不刷新整张网页。
+          await read();
           if (stopped()) break;
-          task.incidentSnapshot = null;
-          log('已按快照恢复可调动居民站位，快照已清除。');
-        } else if (rescueEnabled && incident && !task.incidentSnapshot) {
-          // 事件首次出现时保存全部站位，同一事件周期内不覆盖快照。
-          task.incidentSnapshot = view.state.residents.map(resident => ({ residentId: resident.id, roomId: resident.roomId }));
-          log('发现避难所事件，已保存居民站位快照。');
-          if (rescueMode === 'auto') {
-            for (let count = 0; count < rescueCount; count++) {
-              if (!await act({ type: 'rescue_incident', roomId: incident.id })) break;
-              log(`事件救援：已执行 ${count + 1}/${rescueCount} 次一键救援（房间 ${incident.id}）。`);
+          if (!greeted) {
+            // 首次开启纳入门外无父母的成人；之后以新增 ID 识别电台新居民，不碰原岗位。
+            if (!task.knownIds) {
+              task.knownIds = view.state.residents.map(resident => resident.id);
+              if (view.state.rooms.some(room => room.type === 'radio')) task.newcomers = view.state.residents.filter(resident => resident.roomId === null && resident.away === null && resident.deadAt === null && resident.adultAt <= view.serverTime && resident.parents.length === 0).map(resident => resident.id);
             }
-          } else {
-            // 灭火、堵漏由餐厅支援，其余战斗事件由发电站和武器工坊支援。
-            const useDiner = ['fire', 'leak'].includes(incident.incident.kind);
-            const sourceTypes = useDiner ? ['diner'] : ['power', 'armory'];
-            const sourceRooms = new Set(view.state.rooms.filter(room => sourceTypes.includes(room.type) && !room.incident).map(room => room.id));
-            const candidates = view.state.residents.filter(resident => sourceRooms.has(resident.roomId) && resident.away === null && resident.deadAt === null && resident.adultAt <= view.serverTime);
-            const occupied = view.state.residents.filter(resident => resident.roomId === incident.id && resident.deadAt === null && resident.adultAt <= view.serverTime).length;
-            const slots = Math.max(0, incident.width * 2 - occupied);
-            const rescuers = candidates.slice(0, slots);
-            log(`专人专救：${useDiner ? '餐厅' : '发电站和武器工坊'}可调动 ${candidates.length} 人，事件房间空位 ${slots} 个，本次派出 ${rescuers.length} 人。`);
-            for (const resident of rescuers) {
-              if (stopped() || !view.state.rooms.find(room => room.id === incident.id).incident) break;
-              if (!await act({ type: 'assign', residentId: resident.id, roomId: incident.id })) break;
-              if (view.state.residents.find(item => item.id === resident.id)?.roomId !== incident.id) throw new Error('专人专救调动结果未确认');
-              log(`专人专救：${resident.name} → 事件房间 ${incident.id}。`);
-            }
+            // 每次开启重新记录已有名单，停用期间到来的居民也不参与自动遣散。
+            task.knownIds = view.state.residents.map(resident => resident.id);
+            greeted = true;
+            log(`托管开启：每 ${intervalSeconds} 秒检查，废土 ${recallEvents} 次事件召回${task.birthEnabled ? '，自动生育（造神计划）已开启' : ''}。`);
           }
-        } else if (rescueEnabled && incident && task.incidentSnapshot) {
-          log('事件正在处理中，保留站位快照，继续本轮后续步骤。');
-        }
-        if (stopped()) break;
-        const hasRadio = view.state.rooms.some(room => room.type === 'radio' && room.builtAt <= view.serverTime);
-        if (hasRadio) {
-          for (const resident of view.state.residents) if (!task.knownIds.includes(resident.id) && resident.parents.length === 0 && resident.adultAt <= view.serverTime && resident.roomId === null && resident.away === null && resident.deadAt === null) {
+          await act({ type: 'collect_all' });
+          if (stopped()) break;
+          const incident = view.state.rooms.find(room => room.incident);
+          if (rescueEnabled && !incident && task.incidentSnapshot) {
+            log('事件已结束，正在按快照恢复居民站位。');
+            const pending = task.incidentSnapshot.filter(({ residentId, roomId }) => {
+              const resident = view.state.residents.find(item => item.id === residentId);
+              return resident && resident.away === null && resident.deadAt === null && resident.adultAt <= view.serverTime && resident.roomId !== roomId;
+            });
+            // 先腾出被调动者的现岗位，再恢复原位，避免满房间之间互相占位。
+            for (const { residentId, roomId } of pending) {
+              if (stopped()) break;
+              const resident = view.state.residents.find(item => item.id === residentId);
+              if (resident.roomId === null || resident.roomId === roomId) continue;
+              if (!await act({ type: 'assign', residentId, roomId: null })) break;
+              if (view.state.residents.find(item => item.id === residentId)?.roomId !== null) throw new Error('事件恢复腾位结果未确认');
+            }
+            for (const { residentId, roomId } of pending) {
+              if (stopped()) break;
+              if (view.state.residents.find(item => item.id === residentId).roomId === roomId) continue;
+              if (!await act({ type: 'assign', residentId, roomId })) break;
+              if (view.state.residents.find(item => item.id === residentId)?.roomId !== roomId) throw new Error('事件站位恢复结果未确认');
+            }
             if (stopped()) break;
-            // 只在首次发现门外新成人时判断，已有居民和旧待改名队列不参与遣散。
-            if (dismissEnabled || dismissStatEnabled) {
-              const values = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'].map(key => resident.stats[key]);
-              if (!values.every(Number.isFinite)) throw new Error('新居民属性数据不完整，无法判断遣散');
-              const total = values.reduce((sum, value) => sum + value, 0);
-              // 单项条件只判断用户指定的基础属性。
-              const statValue = resident.stats[dismissStatKey];
-              // 面板单选总属性或指定属性，对选中的条件判断遣散。
-              const totalTooLow = dismissEnabled && total < dismissTotal;
-              const statTooLow = dismissStatEnabled && statValue < dismissStat;
-              if (totalTooLow || statTooLow) {
-                if (!await act({ type: 'dismiss', residentId: resident.id })) break;
-                if (view.state.residents.some(item => item.id === resident.id)) throw new Error('新人遣散结果未确认');
-                log(`新人遣散：${resident.name}（ID ${resident.id}），${totalTooLow ? `总属性 ${total} < ${dismissTotal}` : `${statLabels[dismissStatKey]} ${statValue} < ${dismissStat}`}。`);
-                continue;
+            task.incidentSnapshot = null;
+            log('已按快照恢复可调动居民站位，快照已清除。');
+          } else if (rescueEnabled && incident && !task.incidentSnapshot) {
+            // 事件首次出现时保存全部站位，同一事件周期内不覆盖快照。
+            task.incidentSnapshot = view.state.residents.map(resident => ({ residentId: resident.id, roomId: resident.roomId }));
+            log('发现避难所事件，已保存居民站位快照。');
+            if (rescueMode === 'auto') {
+              for (let count = 0; count < rescueCount; count++) {
+                if (!await act({ type: 'rescue_incident', roomId: incident.id })) break;
+                log(`事件救援：已执行 ${count + 1}/${rescueCount} 次一键救援（房间 ${incident.id}）。`);
+              }
+            } else {
+              // 灭火、堵漏由餐厅支援，其余战斗事件由发电站和武器工坊支援。
+              const useDiner = ['fire', 'leak'].includes(incident.incident.kind);
+              const sourceTypes = useDiner ? ['diner'] : ['power', 'armory'];
+              const sourceRooms = new Set(view.state.rooms.filter(room => sourceTypes.includes(room.type) && !room.incident).map(room => room.id));
+              const candidates = view.state.residents.filter(resident => sourceRooms.has(resident.roomId) && resident.away === null && resident.deadAt === null && resident.adultAt <= view.serverTime);
+              const occupied = view.state.residents.filter(resident => resident.roomId === incident.id && resident.deadAt === null && resident.adultAt <= view.serverTime).length;
+              const slots = Math.max(0, incident.width * 2 - occupied);
+              const rescuers = candidates.slice(0, slots);
+              log(`专人专救：${useDiner ? '餐厅' : '发电站和武器工坊'}可调动 ${candidates.length} 人，事件房间空位 ${slots} 个，本次派出 ${rescuers.length} 人。`);
+              for (const resident of rescuers) {
+                if (stopped() || !view.state.rooms.find(room => room.id === incident.id).incident) break;
+                if (!await act({ type: 'assign', residentId: resident.id, roomId: incident.id })) break;
+                if (view.state.residents.find(item => item.id === resident.id)?.roomId !== incident.id) throw new Error('专人专救调动结果未确认');
+                log(`专人专救：${resident.name} → 事件房间 ${incident.id}。`);
               }
             }
-            task.newcomers.push(resident.id);
+          } else if (rescueEnabled && incident && task.incidentSnapshot) {
+            log('事件正在处理中，保留站位快照，继续本轮后续步骤。');
           }
-        }
-        task.knownIds = view.state.residents.map(resident => resident.id);
-        log(hasRadio ? `新人检查：待改名 ${task.newcomers.length} 人。` : '没有电台，跳过新人检查。');
-        if (hasRadio) for (const id of [...task.newcomers]) {
           if (stopped()) break;
-          let resident = view.state.residents.find(item => item.id === id);
-          if (!resident || resident.roomId !== null || resident.away !== null || resident.deadAt !== null) { task.newcomers = task.newcomers.filter(item => item !== id); continue; }
-          const attributes = [['str', '力'], ['per', '感'], ['end', '耐'], ['cha', '魅'], ['int', '智'], ['agi', '敏'], ['lck', '幸']];
-          const highest = Math.max(...attributes.map(([key]) => resident.stats[key]));
-          const label = attributes.filter(([key]) => resident.stats[key] === highest).map(([,label]) => label).join('');
-          const numbers = view.state.residents.map(item => item.name.match(/^(\d+)(?:\([\d,]+\))?([A-Z]*)$/) || item.name.match(/^[^-]+-(\d+)([A-Z]*)$/));
-          const own = resident.name.match(/^(\d+)(?:\([\d,]+\))?([A-Z]*)$/) || resident.name.match(/^[^-]+-(\d+)([A-Z]*)$/);
-          const number = own ? Number(own[1]) : Math.max(0, ...numbers.filter(Boolean).map(match => Number(match[1]))) + 1;
-          const name = `${label}-${String(number).padStart(3, '0')}${own?.[2] ?? ''}`;
-          if (name.length > 12) throw new Error(`新名字 ${name} 超过 12 字`);
-          if (resident.name !== name) {
-            if (!await act({ type: 'rename_resident', residentId: id, name })) break;
-            resident = view.state.residents.find(item => item.id === id);
-            if (resident.name !== name) throw new Error('新人改名结果未确认');
-            log(`新人改名：${name}（ID ${id}）。`);
-          }
-          // 新人改名完成后出队，保持门外位置。
-          task.newcomers = task.newcomers.filter(item => item !== id);
-        }
-        if (stopped()) break;
-        if (godEnabled) {
-          // 救援快照归位完成后再调整训练岗位，避免新安排被快照覆盖。
-          if (task.incidentSnapshot || view.state.rooms.some(room => room.incident)) log('造神计划：事件处理中，暂停居民调动。');
-          else {
-            const plan = planShelterGod(view);
-            log(`造神计划：检查完成，本轮 ${plan.assignments.length} 步调动。`);
-            for (const { residentId, roomId, message } of plan.assignments) {
-              if (!await act({ type: 'assign', residentId, roomId })) break;
-              if (view.state.residents.find(resident => resident.id === residentId).roomId !== roomId) throw new Error('造神计划调动结果未确认');
-              log(message);
+          const hasRadio = view.state.rooms.some(room => room.type === 'radio' && room.builtAt <= view.serverTime);
+          if (hasRadio) {
+            for (const resident of view.state.residents) if (!task.knownIds.includes(resident.id) && resident.parents.length === 0 && resident.adultAt <= view.serverTime && resident.roomId === null && resident.away === null && resident.deadAt === null) {
+              if (stopped()) break;
+              // 只在首次发现门外新成人时判断，已有居民和旧待改名队列不参与遣散。
+              if (dismissEnabled || dismissStatEnabled) {
+                const values = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'].map(key => resident.stats[key]);
+                if (!values.every(Number.isFinite)) throw new Error('新居民属性数据不完整，无法判断遣散');
+                const total = values.reduce((sum, value) => sum + value, 0);
+                // 单项条件只判断用户指定的基础属性。
+                const statValue = resident.stats[dismissStatKey];
+                // 面板单选总属性或指定属性，对选中的条件判断遣散。
+                const totalTooLow = dismissEnabled && total < dismissTotal;
+                const statTooLow = dismissStatEnabled && statValue < dismissStat;
+                if (totalTooLow || statTooLow) {
+                  if (!await act({ type: 'dismiss', residentId: resident.id })) break;
+                  if (view.state.residents.some(item => item.id === resident.id)) throw new Error('新人遣散结果未确认');
+                  log(`新人遣散：${resident.name}（ID ${resident.id}），${totalTooLow ? `总属性 ${total} < ${dismissTotal}` : `${statLabels[dismissStatKey]} ${statValue} < ${dismissStat}`}。`);
+                  continue;
+                }
+              }
+              task.newcomers.push(resident.id);
             }
           }
-        }
-        if (stopped()) break;
-        log(view.state.explorers.length ? `废土检查：${view.state.explorers.length} 名探险者。` : '没有外出探险人员，跳过废土检查。');
-        for (const original of [...view.state.explorers]) {
+          task.knownIds = view.state.residents.map(resident => resident.id);
+          log(hasRadio ? `新人检查：待改名 ${task.newcomers.length} 人。` : '没有电台，跳过新人检查。');
+          if (hasRadio) for (const id of [...task.newcomers]) {
+            if (stopped()) break;
+            let resident = view.state.residents.find(item => item.id === id);
+            if (!resident || resident.roomId !== null || resident.away !== null || resident.deadAt !== null) { task.newcomers = task.newcomers.filter(item => item !== id); continue; }
+            const attributes = [['str', '力'], ['per', '感'], ['end', '耐'], ['cha', '魅'], ['int', '智'], ['agi', '敏'], ['lck', '幸']];
+            const highest = Math.max(...attributes.map(([key]) => resident.stats[key]));
+            const label = attributes.filter(([key]) => resident.stats[key] === highest).map(([,label]) => label).join('');
+            const numbers = view.state.residents.map(item => item.name.match(/^(\d+)(?:\([\d,]+\))?([A-Z]*)$/) || item.name.match(/^[^-]+-(\d+)([A-Z]*)$/));
+            const own = resident.name.match(/^(\d+)(?:\([\d,]+\))?([A-Z]*)$/) || resident.name.match(/^[^-]+-(\d+)([A-Z]*)$/);
+            const number = own ? Number(own[1]) : Math.max(0, ...numbers.filter(Boolean).map(match => Number(match[1]))) + 1;
+            const name = `${label}-${String(number).padStart(3, '0')}${own?.[2] ?? ''}`;
+            if (name.length > 12) throw new Error(`新名字 ${name} 超过 12 字`);
+            if (resident.name !== name) {
+              if (!await act({ type: 'rename_resident', residentId: id, name })) break;
+              resident = view.state.residents.find(item => item.id === id);
+              if (resident.name !== name) throw new Error('新人改名结果未确认');
+              log(`新人改名：${name}（ID ${id}）。`);
+            }
+            // 新人改名完成后出队，保持门外位置。
+            task.newcomers = task.newcomers.filter(item => item !== id);
+          }
           if (stopped()) break;
-          const explorer = view.state.explorers.find(item => item.id === original.id);
-          const config = deployment(explorer);
-          const resident = view.state.residents.find(item => item.id === explorer.residentId);
-          if (resident.deadAt !== null) { log(`废土：${resident.name} 已倒下，请手动救回。`); continue; }
-          if (explorer.returnAt !== null && explorer.returnAt <= view.serverTime) {
-            if (!await act({ type: 'explore_claim', explorerId: explorer.id })) break;
-            if (view.state.explorers.some(item => item.id === explorer.id)) throw new Error('探险领取结果未确认');
-            task.pendingDispatch[resident.id] = { ...config, healed: false };
-            delete task.deployments[explorer.id];
-            log(`废土：${resident.name} 已到家并领取，准备原样再次派出。`);
-          } else if (explorer.recalledAt !== null) log(`废土：${resident.name} 正在返程。`);
-          else {
-            // events 是服务端实际事件次数，不包含 startedAt 对应的初始出发日志。
-            if (!Number.isInteger(explorer.events)) throw new Error('废土事件计数格式已变化');
-            log(`废土：${resident.name} 已触发 ${explorer.events}/${recallEvents} 次事件（不含出发日志）。`);
-            if (explorer.events >= recallEvents) {
-              if (!await act({ type: 'explore_recall', explorerId: explorer.id })) break;
-              if (view.state.explorers.find(item => item.id === explorer.id)?.recalledAt == null) throw new Error('召回结果未确认');
-              log(`废土：已召回 ${resident.name}。`);
+          if (godEnabled) {
+            // 救援快照归位完成后再调整训练岗位，避免新安排被快照覆盖。
+            if (task.incidentSnapshot || view.state.rooms.some(room => room.incident)) log('造神计划：事件处理中，暂停居民调动。');
+            else {
+              const plan = planShelterGod(view);
+              log(`造神计划：检查完成，本轮 ${plan.assignments.length} 步调动。`);
+              for (const { residentId, roomId, message } of plan.assignments) {
+                if (!await act({ type: 'assign', residentId, roomId })) break;
+                if (view.state.residents.find(resident => resident.id === residentId).roomId !== roomId) throw new Error('造神计划调动结果未确认');
+                log(message);
+              }
             }
           }
-        }
-        for (const [id,{ healed, ...config }] of Object.entries(task.pendingDispatch)) {
           if (stopped()) break;
-          const resident = view.state.residents.find(item => item.id === Number(id));
-          if (resident.away !== null) { log(`废土：${resident.name} 已外出，停止本条重复派出。`); delete task.pendingDispatch[id]; continue; }
-          // 按游戏规则计算血量上限，每次归来只用一针，等待再次出发时不重复治疗。
-          const level = Math.min(50, 1 + Math.floor(Math.sqrt(Math.max(0, resident.xp) / 3)));
-          const maxHp = Math.round(100 + (level - 1) * (2 + 0.5 * resident.stats.end));
-          if (!healed && resident.hp < maxHp * 0.6) {
-            if (view.state.resources.stimpak < 1) { log(`废土：${resident.name} 血量低于 60%，治疗针不足，等待下轮治疗。`); continue; }
-            if (!await act({ type: 'stimpak', residentId: resident.id })) break;
-            task.pendingDispatch[id].healed = true;
-            log(`废土：${resident.name} 血量低于 60%，已使用 1 支治疗针。`);
+          if (task.birthEnabled) {
+            if (stopped()) break;
+            // 与造神计划一致，事件处理或救援站位未归位时暂停居民调动。
+            if (task.incidentSnapshot || view.state.rooms.some(room => room.incident)) log('自动生育：事件处理中，暂停居民调动。');
+            else {
+              await autoBirth();
+              if (stopped()) break;
+              await assignGrownChildren();
+            }
           }
-          if (view.state.resources.stimpak < config.stimpaks) { log(`废土：${resident.name} 原配置需 ${config.stimpaks} 支治疗针，库存不足，保留配置等待下轮。`); continue; }
-          if (!await act({ type: 'explore_start', ...config })) break;
-          const expedition = view.state.explorers.find(item => item.residentId === Number(id));
-          if (!expedition) throw new Error('再次派出结果未确认');
-          task.deployments[expedition.id] = config;
-          delete task.pendingDispatch[id];
-          log(`废土：${resident.name} 已按原区域、${config.stimpaks} 支治疗针、${config.abyss ? '深渊' : '普通'}模式再次出发。`);
+          log(view.state.explorers.length ? `废土检查：${view.state.explorers.length} 名探险者。` : '没有外出探险人员，跳过废土检查。');
+          for (const original of [...view.state.explorers]) {
+            if (stopped()) break;
+            const explorer = view.state.explorers.find(item => item.id === original.id);
+            const config = deployment(explorer);
+            const resident = view.state.residents.find(item => item.id === explorer.residentId);
+            if (resident.deadAt !== null) { log(`废土：${resident.name} 已倒下，请手动救回。`); continue; }
+            if (explorer.returnAt !== null && explorer.returnAt <= view.serverTime) {
+              if (!await act({ type: 'explore_claim', explorerId: explorer.id })) break;
+              if (view.state.explorers.some(item => item.id === explorer.id)) throw new Error('探险领取结果未确认');
+              task.pendingDispatch[resident.id] = { ...config, healed: false };
+              delete task.deployments[explorer.id];
+              log(`废土：${resident.name} 已到家并领取，准备原样再次派出。`);
+            } else if (explorer.recalledAt !== null) log(`废土：${resident.name} 正在返程。`);
+            else {
+              // events 是服务端实际事件次数，不包含 startedAt 对应的初始出发日志。
+              if (!Number.isInteger(explorer.events)) throw new Error('废土事件计数格式已变化');
+              log(`废土：${resident.name} 已触发 ${explorer.events}/${recallEvents} 次事件（不含出发日志）。`);
+              if (explorer.events >= recallEvents) {
+                if (!await act({ type: 'explore_recall', explorerId: explorer.id })) break;
+                if (view.state.explorers.find(item => item.id === explorer.id)?.recalledAt == null) throw new Error('召回结果未确认');
+                log(`废土：已召回 ${resident.name}。`);
+              }
+            }
+          }
+          for (const [id,{ healed, ...config }] of Object.entries(task.pendingDispatch)) {
+            if (stopped()) break;
+            const resident = view.state.residents.find(item => item.id === Number(id));
+            if (resident.away !== null) { log(`废土：${resident.name} 已外出，停止本条重复派出。`); delete task.pendingDispatch[id]; continue; }
+            // 按游戏规则计算血量上限，每次归来只用一针，等待再次出发时不重复治疗。
+            const level = Math.min(50, 1 + Math.floor(Math.sqrt(Math.max(0, resident.xp) / 3)));
+            const maxHp = Math.round(100 + (level - 1) * (2 + 0.5 * resident.stats.end));
+            if (!healed && resident.hp < maxHp * 0.6) {
+              if (view.state.resources.stimpak < 1) { log(`废土：${resident.name} 血量低于 60%，治疗针不足，等待下轮治疗。`); continue; }
+              if (!await act({ type: 'stimpak', residentId: resident.id })) break;
+              task.pendingDispatch[id].healed = true;
+              log(`废土：${resident.name} 血量低于 60%，已使用 1 支治疗针。`);
+            }
+            if (view.state.resources.stimpak < config.stimpaks) { log(`废土：${resident.name} 原配置需 ${config.stimpaks} 支治疗针，库存不足，保留配置等待下轮。`); continue; }
+            if (!await act({ type: 'explore_start', ...config })) break;
+            const expedition = view.state.explorers.find(item => item.residentId === Number(id));
+            if (!expedition) throw new Error('再次派出结果未确认');
+            task.deployments[expedition.id] = config;
+            delete task.pendingDispatch[id];
+            log(`废土：${resident.name} 已按原区域、${config.stimpaks} 支治疗针、${config.abyss ? '深渊' : '普通'}模式再次出发。`);
+          }
+        } catch (error) {
+          if (error.fatal) throw error;
+          if (error.stopped || stopped()) break;
+          log(`本轮遇到临时错误：${error.message}；已保留现有状态，稍后继续。`);
+          roundError = true;
         }
         if (stopped()) break;
         task.nextAt = Date.now() + intervalSeconds * 1000;
-        log(`本轮完成，${intervalSeconds} 秒后开始下一轮。`);
+        log(`本轮${roundError ? '因临时错误跳过剩余步骤' : '完成'}，${intervalSeconds} 秒后开始下一轮。`);
+        roundError = false;
         await wait(intervalSeconds * 1000);
         task.nextAt = null;
       }
