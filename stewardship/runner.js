@@ -280,6 +280,52 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       log(`自动生育：${resident.name} 生育完成，回到${room.floor} 层 ${room.level} 级${roomLabels[room.type] ?? room.type}（房间 ${room.id}）。`);
     }
   }
+  // 已经建立感情关系但被调到不同宿舍的两人，重新安排到同一间宿舍继续积累感情；
+  // 待产或家庭冷却中的不处理。优先使用成员当前所在的宿舍。
+  async function reuniteCouples() {
+    const now = view.serverTime;
+    const byId = new Map(view.state.residents.map(resident => [resident.id, resident]));
+    const pending = new Set(view.state.births.flatMap(birth => birth.parents));
+    const pairing = new Set(task.autoPairs.flatMap(pair => pair.ids));
+    const seen = new Set();
+    for (const resident of view.state.residents) {
+      if (stopped()) return;
+      if (seen.has(resident.id) || !resident.romance) continue;
+      const partner = byId.get(resident.romance.partnerId);
+      if (!partner || partner.romance?.partnerId !== resident.id) continue;
+      seen.add(resident.id);
+      seen.add(partner.id);
+      const members = [resident, partner];
+      if (members.some(item => item.deadAt !== null || item.away !== null || item.adultAt > now)) continue;
+      if (members.some(item => pending.has(item.id) || item.familyCooldownUntil > now)) continue;
+      const current = view.state.rooms.find(room => room.id === resident.roomId);
+      if (current?.type === 'quarters' && resident.roomId === partner.roomId) continue;
+      const fits = room => {
+        const list = adultsIn(room.id);
+        if (room.width * 2 - list.length < 2) return false;
+        if (pairsInRoom(room.id) >= pairCapacity(room)) return false;
+        // 房内不能有其他未配对的成人，避免服务端把新来的人和别人凑成一对。
+        return !list.some(item => !members.some(member => member.id === item.id) && !hasPartner(item, list));
+      };
+      const rooms = view.state.rooms.filter(room => room.type === 'quarters' && room.builtAt <= now &&
+          room.upgradeAt === null && !room.incident && fits(room))
+        .sort((left, right) => right.level - left.level || right.width - left.width || left.floor - right.floor || left.id - right.id);
+      const room = rooms.find(item => item.id === resident.roomId) ?? rooms.find(item => item.id === partner.roomId) ?? rooms[0];
+      if (!room) { log(`自动生育：${resident.name} ＋ ${partner.name} 感情已建立但暂无可用宿舍，等待空位。`); continue; }
+      for (const member of members) {
+        if (member.roomId === room.id) continue;
+        if (!await act({ type: 'assign', residentId: member.id, roomId: room.id })) return;
+        if (view.state.residents.find(item => item.id === member.id)?.roomId !== room.id) throw new Error('感情配对恢复结果未确认');
+      }
+      if (!pairing.has(resident.id) || !pairing.has(partner.id)) {
+        task.autoPairs.push({ roomId: room.id, ids: [resident.id, partner.id] });
+        pairing.add(resident.id);
+        pairing.add(partner.id);
+      }
+      const progress = Math.min(100, Math.floor(resident.romance.progress ?? 0));
+      log(`自动生育：${resident.name} ＋ ${partner.name}（感情 ${progress}%）重新安排到同一间宿舍（房间 ${room.id}）。`);
+    }
+  }
   // 造神计划：成年子代（有父母且父母仍在避难所，含手动生育）属性总和未到 70 的优先训练，
   // 按总和从高到低排队，先练最高的未满属性；没有训练空位或已满 70 时按资源缺口和零件、
   // 废料等顺序安排生产岗位，不留在宿舍等待。
@@ -298,9 +344,14 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     // 刷新面板后 autoParents 会丢失，因此按“父母仍在避难所”识别成年子代；
     // 无父母的新人、已在生产或训练岗位的居民不在其中。
     const living = new Set(view.state.residents.filter(resident => resident.deadAt === null).map(resident => resident.id));
+    const pendingParents = new Set(view.state.births.flatMap(birth => birth.parents));
+    const pairing = new Set(task.autoPairs.flatMap(pair => pair.ids));
     const children = view.state.residents.filter(resident =>
       !assigned.has(resident.id) && resident.deadAt === null && resident.away === null && resident.adultAt <= view.serverTime &&
-      resident.parents.length === 2 && resident.parents.every(id => living.has(id)))
+      resident.parents.length === 2 && resident.parents.every(id => living.has(id)) &&
+      // 正在培养感情、待产或家庭冷却中的居民属于自动生育流程，不能当成成年子代调去工作。
+      !resident.romance && !(resident.familyCooldownUntil > view.serverTime) &&
+      !pendingParents.has(resident.id) && !pairing.has(resident.id))
       .sort((left, right) => total(right) - total(left) || left.id - right.id);
     for (const member of children) {
       if (stopped()) return;
@@ -351,6 +402,8 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     if (stopped()) return;
     if (task.incidentSnapshot || view.state.rooms.some(room => room.incident)) return;
     await returnParents();
+    if (stopped()) return;
+    await reuniteCouples();
     if (stopped()) return;
     await autoBirth(true);
     if (stopped()) return;
@@ -510,9 +563,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
             // 与造神计划一致，事件处理或救援站位未归位时暂停居民调动。
             if (paused()) log('自动生育：事件处理中，暂停居民调动。');
             else {
-              await autoBirth();
-              if (stopped()) break;
               await returnParents();
+              if (stopped()) break;
+              await reuniteCouples();
+              if (stopped()) break;
+              await autoBirth();
               if (stopped()) break;
               await assignGrownChildren();
             }
