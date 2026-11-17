@@ -140,6 +140,8 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     const candidates = view.state.residents.filter(resident => {
       const room = view.state.rooms.find(item => item.id === resident.roomId);
       return resident.deadAt === null && resident.away === null && resident.adultAt <= now && room?.type !== 'quarters' &&
+        // 等待再次派出的探险归来者留在门外休息区，不参与配对。
+        !task.pendingDispatch[resident.id] &&
         !resident.romance && !(resident.familyCooldownUntil > now) && resident.happiness >= 50 &&
         !pendingParents.has(resident.id) && keys.every(key => resident.stats[key] === 10) &&
         // 自动生育的子代成年后去训练/工作岗位，不再次拉回宿舍生育。
@@ -264,6 +266,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     const pairing = new Set(task.autoPairs.flatMap(pair => pair.ids));
     const candidates = view.state.residents.filter(resident => {
       if (pairing.has(resident.id)) return false;
+      if (task.pendingDispatch[resident.id]) return false;
       if (resident.deadAt !== null || resident.away !== null || resident.adultAt > view.serverTime) return false;
       const room = view.state.rooms.find(item => item.id === resident.roomId);
       if (room && room.type !== 'quarters') return false;
@@ -289,6 +292,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     const pairing = new Set(task.autoPairs.flatMap(pair => pair.ids));
     const candidates = view.state.residents.filter(resident => {
       if (resident.deadAt !== null || resident.away !== null || resident.adultAt > now) return false;
+      if (task.pendingDispatch[resident.id]) return false;
       const room = view.state.rooms.find(item => item.id === resident.roomId);
       if (room?.type !== 'quarters') return false;
       if (keys.every(key => resident.stats[key] === 10)) return false;
@@ -326,6 +330,8 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       seen.add(partner.id);
       const members = [resident, partner];
       if (members.some(item => item.deadAt !== null || item.away !== null || item.adultAt > now)) continue;
+      // 等待再次派出的探险归来者留在门外，不拉回宿舍。
+      if (members.some(item => task.pendingDispatch[item.id])) continue;
       // 只为七项基础属性全 10 的配对恢复同房；非全 10 的感情关系不主动拉回宿舍。
       if (members.some(item => !keys.every(key => item.stats[key] === 10))) continue;
       if (members.some(item => pending.has(item.id) || item.familyCooldownUntil > now)) continue;
@@ -380,6 +386,8 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     const children = view.state.residents.filter(resident =>
       !assigned.has(resident.id) && resident.deadAt === null && resident.away === null && resident.adultAt <= view.serverTime &&
       resident.parents.length === 2 && resident.parents.every(id => living.has(id)) &&
+      // 等待再次派出的探险归来者留在门外，不安排岗位。
+      !task.pendingDispatch[resident.id] &&
       // 正在培养感情、待产或家庭冷却中的居民属于自动生育流程，不能当成成年子代调去工作。
       !resident.romance && !(resident.familyCooldownUntil > view.serverTime) &&
       !pendingParents.has(resident.id) && !pairing.has(resident.id))
