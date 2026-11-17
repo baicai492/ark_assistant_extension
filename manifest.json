@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "风堇Ark自动助手",
+  "version": "1.0.0",
+  "description": "主站修仙：奇遇循环、远征循环、速刷迷雾、速刷关卡；避难所：居民配对、居民信息、一键安排与一键托管。",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "power",
+    "alarms"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://game.arkengine.me/*"
+      ],
+      "js": [
+        "overload/content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://game.arkengine.me/activities/expedition*"
+      ],
+      "js": [
+        "expedition/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>居民配对</title>
+  <link rel="stylesheet" href="../module.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>居民配对<button class="help-button" type="button" aria-label="居民配对说明" title="按七项属性总和从高到低推荐，每位居民只出现一次。排除儿童、在宿舍培养感情中和刚组建家庭的居民；有感情记录但不在宿舍的居民可以参与配对。&#10;&#10;有共同父母或互为亲子的居民不能配对。&#10;&#10;按居民列表的基础属性计算。安排期间请勿手动调动居民；重新计算可更新配对状态。">?</button></h1>
+  <form id="settings">
+    <label for="group-count">推荐组数<input id="group-count" type="number" min="1" step="1" value="1" required disabled></label>
+    <div class="actions"><button id="calculate" type="submit" disabled>计算最佳配对</button></div>
+  </form>
+  <p id="status" role="status" aria-live="polite">正在连接页面…</p>
+  <section id="result" aria-label="推荐配对" hidden>
+    <div class="actions"><div class="action-with-help"><button id="assign-dorms" type="button" disabled>一键安排宿舍</button><button class="help-button" type="button" aria-label="安排宿舍说明" title="高分配对优先入住高等级宿舍，每间仅一对成人。原有成人移到门外休息，儿童保留且不占成人名额；跳过待产或培养感情中的宿舍。">?</button></div></div>
+    <ol id="pairs"></ol>
+  </section>
+  <details id="excluded" hidden>
+    <summary id="excluded-count"></summary>
+    <ul id="excluded-list"></ul>
+  </details>
+  <script src="assign.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

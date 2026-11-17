@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>处理事件</title>
+  <link rel="stylesheet" href="../module.css">
+  <link rel="stylesheet" href="../workforce/popup.css">
+</head>
+<body data-task="incidents">
+  <h1>处理事件</h1>
+  <div class="actions"><button id="start" disabled>一键处理</button><button id="snapshot" disabled>查看快照</button><button id="restore" disabled>恢复原位</button></div>
+  <p class="note">处理前保存全员位置，恢复原位按该快照执行。未恢复前重复处理事件保留原快照；恢复完成后下次处理会更新快照。</p>
+  <p class="note" style="color: #c62828; font-weight: bold;">注意：快照仅保存在当前游戏页面内存中。关闭扩展面板不会丢失，但刷新或关闭游戏页面会清除快照，届时无法按该快照恢复原位，请先完成恢复。</p>
+  <section id="snapshot-view" hidden><p id="snapshot-time"></p><ul id="snapshot-list"></ul></section>
+  <p class="note">处理事件会检查全部房间（含大门），将所有在家且未倒下的成人集中到事件房间，不保留宿舍、训练室或感情关系中的居民，不受房间定员限制。儿童不调动。</p>
+  <p class="note">同时有多个事件时，按楼层从上到下、位置从左到右选择一个。本次集中完成后由游戏自动处理事件，结束后可点击“恢复原位”。外出、倒下等无法调动的居民会列出原因，保留快照供后续恢复。</p>
+  <p id="status" role="status" aria-live="polite">正在连接页面…</p>
+  <p id="rates" hidden></p>
+  <ul id="rooms"></ul>
+  <details id="excluded" hidden>
+    <summary id="excluded-count"></summary>
+    <ul id="excluded-list"></ul>
+  </details>
+  <p class="note">安排期间请勿手动调动居民。关闭面板后仍会继续，重新打开可查看结果。</p>
+  <script src="../workforce/popup.js"></script>
+</body>
+</html>

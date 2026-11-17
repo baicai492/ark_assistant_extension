@@ -1,0 +1,23 @@
+* { box-sizing: border-box; }
+body { margin: 16px; padding: 18px; border: 1px solid #e5e9f1; border-radius: 14px; background: #fff; color: #283750; font: 13px/1.65 "Microsoft YaHei", sans-serif; }
+html { background: #f4f7fb; }
+h1 { margin: 0 0 10px; font-size: 17px; }
+p { margin: 10px 0; }
+label { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0; }
+input[type="number"] { width: 98px; padding: 7px 10px; border: 1px solid #dce1ec; border-radius: 8px; color: #283750; font: inherit; }
+input[type="checkbox"] { accent-color: #8067bc; margin: 0; }
+label:has(input[type="checkbox"]) { justify-content: flex-start; }
+.actions { display: flex; gap: 10px; margin: 16px 0; }
+button { flex: 1; padding: 10px 14px; border: 0; border-radius: 9px; background: #8067bc; color: white; font: inherit; font-weight: bold; cursor: pointer; }
+#stop { background: #edf0f6; color: #53617a; }
+button:disabled { opacity: .45; cursor: default; }
+input:disabled { background: #f3f5f9; }
+button:focus-visible, input:focus-visible { outline: 2px solid #8873c5; outline-offset: 2px; }
+#status { white-space: pre-line; overflow-wrap: anywhere; padding: 12px; border-radius: 9px; background: #f2effa; color: #69548f; }
+small, .note, .hint { display: block; color: #778296; font-size: 12px; }
+.notice { border-left: 3px solid #b39bdb; padding-left: 10px; }
+/* 说明收进问号按钮，使用原生悬停提示避免被面板边界裁切。 */
+.help-button { flex: none; width: 20px; height: 20px; margin-left: 6px; padding: 0; border: 1px solid #d8ccec; border-radius: 50%; background: #f2effa; color: #8067bc; font-size: 12px; line-height: 18px; vertical-align: middle; cursor: help; }
+.help-button:hover { background: #e6def5; color: #604795; }
+.action-with-help { display: flex; flex: 1; align-items: center; gap: 4px; }
+.actions .help-button { margin: 0; padding: 0; }

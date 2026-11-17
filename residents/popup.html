@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>居民信息</title>
+  <link rel="stylesheet" href="../module.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>居民信息<button class="help-button" type="button" aria-label="居民信息说明" title="排序包含全部居民，使用基础属性。战力 = 等级×2 + 力量 + 耐力 + 敏捷。&#10;&#10;感情进度包含暂停中的配对及家庭冷却中的居民，冷却居民按结束时间升序展示剩余时间；儿童成长先列出婴儿出生倒计时，再按剩余成长时间升序列出儿童。数据与剩余时间以本次读取为准，点击对应按钮刷新。">?</button></h1>
+  <div class="actions">
+    <button type="button" data-view="total" aria-pressed="false" disabled>属性总和排序 ↓</button>
+    <button type="button" data-view="totalAsc" aria-pressed="false" disabled>属性总和排序 ↑</button>
+    <button type="button" data-view="combatPower" aria-pressed="false" disabled>战斗力排序 ↓</button>
+  </div>
+  <div class="actions">
+    <button type="button" data-view="romances" aria-pressed="false" disabled>感情进度</button>
+    <button type="button" data-view="children" aria-pressed="false" disabled>儿童成长</button>
+  </div>
+  <div class="actions">
+    <button type="button" data-view="training" aria-pressed="false" disabled>训练进度</button>
+    <div class="action-with-help"><button type="button" id="rename" disabled>一键改名</button><button class="help-button" type="button" aria-label="一键改名说明" title="名称中带有 ★ 的居民保留原名，不修改编号或亲本标记。&#10;&#10;一键改名：最高基础属性简称-三位编号，例如力-003；并列最高属性全部保留，例如力感-003，按力、感、耐、魅、智、敏、幸顺序排列。保留已有编号数值（兼容 3、3(1,2)、力量-3、力-003）；无编号者按等级降序、同级 ID 升序，从现有最大编号后接续。&#10;&#10;一键改名保留编号后的其他大写字母，A/B/C/D 每次重新分配：从全部居民（含儿童）中选出七项基础属性总和合计最高、两对不重复用人的组合，A＋B、C＋D 分别配对。仅同一对排除亲子及共同父母，跨对允许有亲属关系；高总分的一对标记 A、B，另一对标记 C、D，各对内高分者在前，同分按 ID 排序。凑不足两对时不标记。">?</button></div>
+  </div>
+  <p id="status" role="status" aria-live="polite">正在连接页面…</p>
+  <section id="result" aria-labelledby="result-title" hidden>
+    <p><strong id="result-title"></strong><button id="training-note" class="help-button" type="button" aria-label="训练进度说明" title="这里只展示当前训练室内的居民（含暂停、练满）。居民离开训练室后，游戏详情不显示训练进度，但不代表进度清零；离开后返回原训练室可保留进度，其他岗位居民进入训练室也可能显示已有进度。尚未确认进度是否按属性分别保存。" hidden>?</button></p>
+    <ol id="residents"></ol>
+  </section>
+  <script src="popup.js"></script>
+</body>
+</html>

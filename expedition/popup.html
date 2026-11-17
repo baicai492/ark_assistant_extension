@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>远征循环</title>
+  <link rel="stylesheet" href="../module.css">
+</head>
+<body>
+  <h1>远征循环<button class="help-button" type="button" aria-label="远征循环说明" title="边境巡逻 · 1h · 完整行程&#10;&#10;派出后读取最晚的完整到达时间，再等 1 分钟领取；到点不可领取时，每 5 秒重查，最多 20 次。关闭此面板可继续运行，请保留远征页面。">?</button></h1>
+  <p><label><input id="burst" type="checkbox"> 允许使用今日突发额度</label></p>
+  <div class="actions">
+    <button id="start" disabled>开始循环</button>
+    <button id="stop" disabled>停止</button>
+  </div>
+  <p id="status">正在连接页面…</p>
+  <script src="popup.js"></script>
+</body>
+</html>
+
