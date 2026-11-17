@@ -9,7 +9,12 @@ function planOutfits(view) {
     throw new Error('装备数据格式已变化');
   }
   const keys = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'];
-  const statByRoom = { power: 'str', diner: 'agi', water: 'per', scrap: 'end', workshop: 'int', medbay: 'int', radio: 'cha' };
+  // 与游戏房间定义一致：岗位需要哪项基础属性就穿对应服装。
+  // 训练室按 trainStat；宿舍和门外属于休息位置，不主动分配服装。
+  const statByRoom = {
+    door: 'end', power: 'str', diner: 'agi', water: 'per', scrap: 'end', storage: 'end',
+    medbay: 'int', workshop: 'int', armory: 'str', tailor: 'cha', radio: 'cha'
+  };
   const rooms = new Map(state.rooms.map(room => [room.id, room]));
   const items = state.items.filter(item => item?.slot === 'outfit' && item.bonus && typeof item.bonus === 'object' &&
     keys.every(key => item.bonus[key] == null || Number.isFinite(item.bonus[key])));
