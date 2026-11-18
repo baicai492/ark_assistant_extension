@@ -55,6 +55,12 @@ function planShelterGod(view) {
             left.room.floor - right.room.floor || left.room.id - right.room.id);
         if (options.length) return options[0].room;
       }
+      // 没有缺口且零件工坊、废料回收站、医务室、电台都满员时，把空闲居民补进电力、
+      // 食物、净水等还有空位的生产房间，避免有人闲置而资源库存长期不满。
+      const spare = candidates.filter(room => room.type !== 'radio')
+        .sort((left, right) => right.level - left.level || right.width - left.width ||
+          left.floor - right.floor || left.id - right.id);
+      if (spare.length) return spare[0];
       return candidates.filter(room => room.type === 'radio')
         .sort((left, right) => right.level - left.level || left.floor - right.floor || left.id - right.id)[0] ?? null;
     }
