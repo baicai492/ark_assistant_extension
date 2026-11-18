@@ -1,0 +1,29 @@
+// 避难所日志桥接：页面里的托管脚本通过 postMessage 发送日志，
+// 这里批量写入 chrome.storage.local，刷新页面或关闭面板后仍可查看。
+// 与 yuyugu 等扩展的做法一致，不依赖本地进程。
+(() => {
+  if (globalThis.__fengbaoShelterLogBridge) return;
+  globalThis.__fengbaoShelterLogBridge = true;
+  let pending = [];
+  let timer = 0;
+  const flush = async () => {
+    timer = 0;
+    try {
+      const { shelterLogs = [] } = await chrome.storage.local.get('shelterLogs');
+      const batch = pending;
+      pending = [];
+      await chrome.storage.local.set({ shelterLogs: shelterLogs.concat(batch) });
+    } catch {}
+  };
+  window.addEventListener('message', event => {
+    if (event.source !== window || event.origin !== location.origin) return;
+    const data = event.data;
+    if (data?.src !== 'fengbao-shelter-log' || data.type !== 'log' || typeof data.line !== 'string') return;
+    pending.push(data.line);
+    if (!timer) timer = setTimeout(flush, 400);
+  });
+  // 弹窗里点了“清空日志”时，丢弃尚未写入的批次，避免旧日志被重新写回。
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.shelterLogs && !changes.shelterLogs.newValue) pending = [];
+  });
+})();
