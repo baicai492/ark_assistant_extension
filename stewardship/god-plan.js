@@ -1,4 +1,4 @@
-function planShelterGod(view) {
+function planShelterGod(view, excludedIds = new Set()) {
   if (!Array.isArray(view.state?.rooms) || !Array.isArray(view.state.residents)) throw new Error('造神计划数据格式已变化');
   const { rooms, residents } = view.state;
   const now = view.serverTime;
@@ -22,7 +22,7 @@ function planShelterGod(view) {
   const freeSlots = room => room.width * 2 - occupants(room).length;
   function move(resident, room, message) {
     const roomId = room ? room.id : null;
-    assignments.push({ residentId: resident.id, roomId, message: message ?? `造神计划：${resident.name} → ${room ? roomName(room) : '去休息'}。` });
+    assignments.push({ residentId: resident.id, roomId, message: message ?? `造神计划：${resident.name}#${resident.id} → ${room ? roomName(room) : '去休息'}。` });
     positions.set(resident.id, roomId);
   }
   // 优先练当前最高的未满属性；同一属性按房间等级、容量排序。
@@ -83,7 +83,7 @@ function planShelterGod(view) {
         progress: current >= 10 ? 1 : Math.max(0, Math.min(1, resident.training)),
         room: roomName(room), nextRoom: next ? roomName(next) : '去休息'
       });
-      if (current >= 10) move(resident, next);
+      if (current >= 10 && !excludedIds.has(resident.id)) move(resident, next);
       continue;
     }
     if (current < 10) continue;
@@ -91,11 +91,11 @@ function planShelterGod(view) {
     if (sum < 70) {
       // 当前属性练满但总和未到 70：优先转到下一个最高未满属性的训练室。
       const next = nextTraining(resident, room);
-      if (next) move(resident, next, `造神计划：${resident.name}（属性 ${sum}/70）练满${labels[room.trainStat]}，转练${labels[next.trainStat]} → ${roomName(next)}。`);
+      if (next && !excludedIds.has(resident.id)) move(resident, next, `造神计划：${resident.name}#${resident.id}（属性 ${sum}/70）练满${labels[room.trainStat]}，转练${labels[next.trainStat]} → ${roomName(next)}。`);
     } else {
       // 总和已满 70：安排生产岗位；暂时没有空位就留在训练室等待。
       const job = chooseJob(resident);
-      if (job) move(resident, job, `造神计划：${resident.name} 属性已满 70 → ${roomName(job)}。`);
+      if (job && !excludedIds.has(resident.id)) move(resident, job, `造神计划：${resident.name}#${resident.id} 属性已满 70 → ${roomName(job)}。`);
     }
   }
 
@@ -104,8 +104,10 @@ function planShelterGod(view) {
     const roomId = positions.get(resident.id);
     if (roomId === null) return false;
     const room = rooms.find(item => item.id === roomId);
-    if (!room || room.type === 'quarters' || room.type === 'storage' || room.type === 'training') return false;
+    if (!room || room.type === 'quarters' || room.type === 'storage' || room.type === 'training' || room.type === 'door') return false;
     if (room.incident || pendingParents.has(resident.id) || total(resident) >= 70) return false;
+    // 刚被资源补缺、配对等流程搬过的居民本轮不再转岗，避免同一个人被连续搬两次。
+    if (excludedIds.has(resident.id)) return false;
     return true;
   }).sort((left, right) => total(right) - total(left) || left.id - right.id);
   // 训练不产出：抽人前先确认电力、食物、净水不会因此转负，保证资源缺口优先。
@@ -120,7 +122,7 @@ function planShelterGod(view) {
       const after = model.net([...assignments, { residentId: resident.id, roomId: room.id }]);
       if (critical.some(key => before[key] >= 0 && after[key] < 0)) continue;
     }
-    move(resident, room, `造神计划：${resident.name}（属性 ${total(resident)}/70）优先训练 → ${roomName(room)}。`);
+    move(resident, room, `造神计划：${resident.name}#${resident.id}（属性 ${total(resident)}/70）优先训练 → ${roomName(room)}。`);
   }
   return { assignments, parents };
 }

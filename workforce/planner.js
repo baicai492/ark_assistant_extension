@@ -163,7 +163,7 @@ function planWorkforce(view) {
 // 同种资源的房间出现空位时，把已经在该资源更低等级房间里工作的居民迁到高等级房间：
 // 高等级房间产能更高，迁入后这种资源的总产出上升，不会造成新的缺口。
 // 外出居民的岗位仍占容量，与游戏调动校验一致；正在升级、停电的房间暂时没有产出，不作为迁入目标。
-function planRoomUpgrade(view) {
+function planRoomUpgrade(view, excludedIds = new Set()) {
   const model = workforceModel(view);
   const now = view.serverTime;
   const resourceOf = room => model.types[room.type]?.resource ?? null;
@@ -179,7 +179,8 @@ function planRoomUpgrade(view) {
       const resource = resourceOf(target);
       if (!resource || occupants(target.id) >= target.width * 2) continue;
       for (const worker of view.state.residents) {
-        if (worker.away !== null || worker.deadAt !== null || worker.adultAt > now || questTeams.has(worker.id)) continue;
+        if (worker.away !== null || worker.deadAt !== null || worker.adultAt > now || questTeams.has(worker.id) ||
+            excludedIds.has(worker.id)) continue;
         const origin = view.state.rooms.find(room => room.id === positions.get(worker.id));
         if (!origin || origin.id === target.id || resourceOf(origin) !== resource || origin.level >= target.level) continue;
         // 零件工坊迁入会增加废料消耗，废料会转负时不迁。
@@ -198,7 +199,7 @@ function planRoomUpgrade(view) {
     positions.set(best.worker.id, best.target.id);
     assignments.push({
       residentId: best.worker.id, roomId: best.target.id,
-      message: `等级调整：${best.worker.name} 从 ${best.origin.floor} 层 ${best.origin.level} 级${model.types[best.origin.type].name}调到 ` +
+      message: `等级调整：${best.worker.name}#${best.worker.id} 从 ${best.origin.floor} 层 ${best.origin.level} 级${model.types[best.origin.type].name}调到 ` +
         `${best.target.floor} 层 ${best.target.level} 级${model.types[best.target.type].name}（房间 ${best.target.id}）。`
     });
   }
@@ -208,7 +209,7 @@ function planRoomUpgrade(view) {
 // 资源补缺：电力、食物、净水出现负收益时，从废料回收站、零件工坊、医务室、电台等
 // 非缺口岗位调出居民补进缺口房间的空位。训练室居民不参与，避免中断训练；
 // 原岗位的资源调出后不能转负。一次最多规划 12 步，由托管逐条执行。
-function planResourceBalance(view) {
+function planResourceBalance(view, excludedIds = new Set()) {
   const model = workforceModel(view);
   if (!Array.isArray(view?.state?.births)) throw new Error('避难所数据格式已变化');
   const deficitsKeys = ['power', 'food', 'water'];
@@ -240,7 +241,7 @@ function planResourceBalance(view) {
     };
     const same = (left, right) => left.every((value, index) => value === right[index]);
     for (const resident of view.state.residents) {
-      if (!atHome(resident) || questTeams.has(resident.id)) continue;
+      if (!atHome(resident) || questTeams.has(resident.id) || excludedIds.has(resident.id)) continue;
       const origin = roomById.get(positions.get(resident.id));
       if (!origin) continue;
       const originResource = resourceOf(origin);
@@ -265,7 +266,7 @@ function planResourceBalance(view) {
     positions.set(best.resident.id, best.room.id);
     assignments.push({
       residentId: best.resident.id, roomId: best.room.id,
-      message: `资源补缺：${best.resident.name} 从${types[best.origin.type]?.name ?? best.origin.type}调到${types[best.room.type]?.name}（房间 ${best.room.id}）。`
+      message: `资源补缺：${best.resident.name}#${best.resident.id} 从${types[best.origin.type]?.name ?? best.origin.type}调到${types[best.room.type]?.name}（房间 ${best.room.id}）。`
     });
   }
   return assignments;
