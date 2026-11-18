@@ -131,16 +131,46 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   // 自动生育的子代按造神计划处理：属性总和未满 70 的优先训练，按总和从高到低排队。
   async function autoBirth(quiet = false) {
     const now = view.serverTime;
+    // 与游戏一致：人口 = 存活居民 + 待产，人口上限 = 已建成宿舍的宽度 ×(2+2×等级)，最高 200。
     const living = view.state.residents.filter(resident => resident.deadAt === null).length + view.state.births.length;
-    const capacity = Math.min(200, view.state.rooms.filter(room => room.type === 'quarters')
+    const capacity = Math.min(200, view.state.rooms.filter(room => room.type === 'quarters' && room.builtAt <= now)
       .reduce((sum, room) => sum + room.width * (2 + 2 * room.level), 0));
     if (living >= capacity) { if (!quiet) log(`自动生育：人口已满（${living}/${capacity}），本轮不安排新配对。`); return; }
+    const pendingParents = new Set(view.state.births.flatMap(birth => birth.parents));
+    const byId = new Map(view.state.residents.map(resident => [resident.id, resident]));
+    // 已经建立感情、尚未待产的配对每对会占 1 个出生名额；不预留的话，
+    // 感情 100% 时会撞上人口上限，只能显示“人口已满，等待空位”。
+    const reserved = new Set();
+    for (const resident of view.state.residents) {
+      if (resident.deadAt !== null || resident.away !== null || resident.adultAt > now || !resident.romance) continue;
+      const partner = byId.get(resident.romance.partnerId);
+      if (!partner || partner.romance?.partnerId !== resident.id || resident.id > partner.id) continue;
+      if (pendingParents.has(resident.id) || pendingParents.has(partner.id)) continue;
+      if (resident.familyCooldownUntil > now || partner.familyCooldownUntil > now) continue;
+      const room = view.state.rooms.find(item => item.id === resident.roomId);
+      if (!room || room.type !== 'quarters' || partner.roomId !== room.id || room.builtAt > now || room.incident) continue;
+      if (resident.happiness < 50 || partner.happiness < 50) continue;
+      reserved.add(`${Math.min(resident.id, partner.id)}-${Math.max(resident.id, partner.id)}`);
+    }
+    // 刚安排进宿舍、服务端感情还没建立的配对同样要预留名额。
+    for (const pair of task.autoPairs) {
+      const [left, right] = pair.ids.map(id => byId.get(id));
+      if (!left || !right || left.deadAt !== null || right.deadAt !== null) continue;
+      if (pendingParents.has(left.id) || pendingParents.has(right.id)) continue;
+      if (left.familyCooldownUntil > now || right.familyCooldownUntil > now) continue;
+      if (left.romance || right.romance) continue;
+      reserved.add(`${Math.min(left.id, right.id)}-${Math.max(left.id, right.id)}`);
+    }
+    const freeBirths = capacity - living - reserved.size;
+    if (freeBirths <= 0) {
+      if (!quiet) log(`自动生育：人口上限已全部预留给现有配对（${living + reserved.size}/${capacity}），暂不安排新配对。`);
+      return;
+    }
     const rooms = view.state.rooms.filter(room => room.type === 'quarters' && room.builtAt <= now &&
       room.upgradeAt === null && !room.incident && ['id', 'level', 'width', 'floor'].every(key => Number.isFinite(room[key])))
       .sort((left, right) => right.level - left.level || right.width - left.width || left.floor - right.floor || left.id - right.id);
     const slots = rooms.reduce((sum, room) => sum + freePairSlots(room), 0);
     if (!slots) { if (!quiet) log('自动生育：没有可用宿舍空位。'); return; }
-    const pendingParents = new Set(view.state.births.flatMap(birth => birth.parents));
     const autoParents = new Set(task.autoParents);
     const questTeams = questTeamIds();
     const candidates = view.state.residents.filter(resident => {
@@ -155,7 +185,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         // 自动生育的子代成年后去训练/工作岗位，不再次拉回宿舍生育。
         !(resident.parents.length === 2 && resident.parents.every(id => autoParents.has(id)));
     }).sort((left, right) => left.id - right.id);
-    const limit = Math.min(slots, capacity - living, Math.floor(candidates.length / 2));
+    const limit = Math.min(slots, freeBirths, Math.floor(candidates.length / 2));
     const used = new Set();
     const pairs = [];
     for (const left of candidates) {
