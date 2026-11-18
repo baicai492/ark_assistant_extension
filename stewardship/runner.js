@@ -1357,6 +1357,36 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       log('本周任务：已有 2 支小队在任务中，等有队伍回来再派新队。');
     }
   }
+  // 训练室里的居民某项练满 10 后不用等完整检查间隔：快速检查时只撤出这些居民，
+  // 转到下一项训练或生产岗位；不重新补人、不搬门外居民，避免每 30 秒大面积调动。
+  async function rotateFinishedTrainees() {
+    if (task.incidentSnapshot || view.state.rooms.some(room => room.incident)) return;
+    const excluded = protectedIds();
+    for (const id of task.newcomers) excluded.add(id);
+    for (const id of Object.keys(task.pendingDispatch)) excluded.add(Number(id));
+    const plan = planShelterGod(view, excluded, true);
+    for (const { residentId, roomId, message } of plan.assignments) {
+      if (stopped()) break;
+      if (!await act({ type: 'assign', residentId, roomId })) break;
+      if (view.state.residents.find(resident => resident.id === residentId)?.roomId !== roomId) throw new Error('造神计划调动结果未确认');
+      log(message);
+    }
+  }
+  // 练满 70 的休息区居民：生产岗位出现空位时补进去。安排在大门值守之后执行，
+  // 让守门先选人；岗位仍满员时继续留在门外休息，不占训练位。
+  async function assignIdleMaxedToJobs() {
+    if (task.incidentSnapshot || view.state.rooms.some(room => room.incident)) return;
+    const excluded = protectedIds();
+    for (const id of task.newcomers) excluded.add(id);
+    for (const id of Object.keys(task.pendingDispatch)) excluded.add(Number(id));
+    const plan = planShelterGod(view, excluded, false, true);
+    for (const { residentId, roomId, message } of plan.assignments) {
+      if (stopped()) break;
+      if (!await act({ type: 'assign', residentId, roomId })) break;
+      if (view.state.residents.find(resident => resident.id === residentId)?.roomId !== roomId) throw new Error('造神计划调动结果未确认');
+      log(message);
+    }
+  }
   // 快速检查：成年子代安排训练或工作、待产父母回岗、配对后补资源缺口、穿上装备，
   // 不必等完整检查间隔。
   async function quickCheck() {
@@ -1370,6 +1400,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     // gateHold 会避免同一居民被移出后马上放回。
     await assignGateGuards();
     if (stopped()) return;
+    if (godEnabled) {
+      // 练满 70 的休息区居民在岗位有空位时上岗；守门已经先选过人。
+      await assignIdleMaxedToJobs();
+      if (stopped()) return;
+    }
     await returnParents();
     if (stopped()) return;
     await moveLowPriorityDormResidents();
@@ -1383,6 +1418,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     // 配对把人调去宿舍后可能立刻出现电力、食物、净水缺口，马上从废料回收站等岗位补人。
     await balanceResources();
     if (stopped()) return;
+    if (godEnabled) {
+      // 练满当前训练项的居民立即转下一站，不用等完整检查间隔。
+      await rotateFinishedTrainees();
+      if (stopped()) return;
+    }
     await assignGrownChildren();
     if (stopped()) return;
     await assignReturnedResidents();
@@ -1584,6 +1624,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           if ((godEnabled || task.birthEnabled) && paused()) log('大门值守：事件处理中，暂停居民调动。');
           else if (godEnabled || task.birthEnabled) await assignGateGuards();
           if (stopped()) break;
+          // 守门补齐后再让练满 70 的休息区居民补生产空位，避免守门被岗位抢人。
+          if (godEnabled && !paused()) await assignIdleMaxedToJobs();
+          if (stopped()) break;
           if (task.birthEnabled) {
             if (stopped()) break;
             // 与造神计划一致，事件处理或救援站位未归位时暂停居民调动。
@@ -1671,19 +1714,23 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         task.nextAt = nextAt;
         log(`本轮${roundError ? '因临时错误跳过剩余步骤' : '完成'}，${intervalSeconds} 秒后开始下一轮。`);
         roundError = false;
-        // 成年子代、待产父母和装备不必等完整间隔：等待期间每 30 秒快速检查一次。
-        // 只开自动周常时也每 30 秒检查任务到家和休息区闲置人员，及时编队出发。
+        // 成年子代、待产父母、练满训练项的居民和装备不必等完整间隔：等待期间每 30 秒快速检查一次。
+        // 只开自动周常或造神计划时也每 30 秒检查，及时编队出发、撤出练满的居民。
         while (!stopped() && Date.now() < nextAt) {
           await wait(Math.min(30000, nextAt - Date.now()));
           if (stopped()) break;
-          if (!task.birthEnabled && !task.questEnabled) continue;
+          if (!task.birthEnabled && !task.questEnabled && !godEnabled) continue;
           try {
             if (task.birthEnabled) {
               await quickCheck();
             } else {
               await read();
               if (stopped()) break;
-              await handleWeeklyQuests();
+              if (task.questEnabled) {
+                await handleWeeklyQuests();
+                if (stopped()) break;
+              }
+              if (godEnabled) await rotateFinishedTrainees();
             }
           } catch (error) {
             if (error.fatal) throw error;

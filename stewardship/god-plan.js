@@ -1,4 +1,4 @@
-function planShelterGod(view, excludedIds = new Set()) {
+function planShelterGod(view, excludedIds = new Set(), onlyFinishedTraining = false, onlyIdleJobs = false) {
   if (!Array.isArray(view.state?.rooms) || !Array.isArray(view.state.residents)) throw new Error('造神计划数据格式已变化');
   const { rooms, residents } = view.state;
   const now = view.serverTime;
@@ -71,12 +71,27 @@ function planShelterGod(view, excludedIds = new Set()) {
       .sort((left, right) => right.level - left.level || left.floor - right.floor || left.id - right.id)[0] ?? null;
   }
 
-  // 已在训练室的居民：未满 70 继续练下一个最高未满属性；满 70 转生产岗位。
-  for (const resident of workers) {
-    const room = rooms.find(item => item.id === resident.roomId);
-    if (!room || room.type !== 'training') continue;
-    const current = resident.stats[room.trainStat];
-    if (resident.name.includes('★')) {
+  // 已在训练室的居民：先撤出练满 70 的，腾出训练位；再转练未满 70 的。
+  // 分多遍处理，避免排在前面的人因为目标训练室还没腾空而被跳过、干等下一轮。
+  if (!onlyIdleJobs) {
+    const trainingRoomOf = resident => rooms.find(item => item.id === positions.get(resident.id));
+    // 第一遍：练满 70 的普通居民去生产岗位；岗位也满员时撤到门外休息区。
+    for (const resident of workers) {
+      if (resident.name.includes('★')) continue;
+      const room = trainingRoomOf(resident);
+      if (!room || room.type !== 'training' || resident.stats[room.trainStat] < 10) continue;
+      if (total(resident) < 70 || excludedIds.has(resident.id)) continue;
+      const job = chooseJob(resident);
+      move(resident, job, job
+        ? `造神计划：${resident.name}#${resident.id} 属性已满 70 → ${roomName(job)}。`
+        : `造神计划：${resident.name}#${resident.id} 属性已满 70，生产岗位已满，先到门外休息区等待上岗。`);
+    }
+    // 第二遍：亲本记录训练情况，练满当前项的转到下一个有空位的训练室。
+    for (const resident of workers) {
+      if (!resident.name.includes('★')) continue;
+      const room = trainingRoomOf(resident);
+      if (!room || room.type !== 'training') continue;
+      const current = resident.stats[room.trainStat];
       const next = nextTraining(resident, room);
       parents.push({
         id: resident.id, name: resident.name, stat: labels[room.trainStat], current,
@@ -84,24 +99,36 @@ function planShelterGod(view, excludedIds = new Set()) {
         room: roomName(room), nextRoom: next ? roomName(next) : '去休息'
       });
       if (current >= 10 && !excludedIds.has(resident.id)) move(resident, next);
-      continue;
     }
-    if (current < 10) continue;
-    const sum = total(resident);
-    if (sum < 70) {
-      // 当前属性练满但总和未到 70：优先转到下一个最高未满属性的训练室。
-      const next = nextTraining(resident, room);
-      if (next && !excludedIds.has(resident.id)) move(resident, next, `造神计划：${resident.name}#${resident.id}（属性 ${sum}/70）练满${labels[room.trainStat]}，转练${labels[next.trainStat]} → ${roomName(next)}。`);
-    } else {
-      // 总和已满 70：安排生产岗位；暂时没有空位就留在训练室等待。
-      const job = chooseJob(resident);
-      if (job && !excludedIds.has(resident.id)) move(resident, job, `造神计划：${resident.name}#${resident.id} 属性已满 70 → ${roomName(job)}。`);
+    // 第三遍：未满 70 且当前训练项已满 10 的居民转练下一个未满属性。
+    // 重复扫描，让别人腾出的训练位在前一轮被跳过的人也能在同一轮补上。
+    for (let round = 0; round < keys.length; round++) {
+      let moved = 0;
+      for (const resident of workers) {
+        if (resident.name.includes('★')) continue;
+        const room = trainingRoomOf(resident);
+        if (!room || room.type !== 'training' || resident.stats[room.trainStat] < 10) continue;
+        const sum = total(resident);
+        if (sum >= 70 || excludedIds.has(resident.id)) continue;
+        // 当前属性练满但总和未到 70：转到下一个最高未满属性的训练室。
+        const next = nextTraining(resident, room);
+        if (next) {
+          move(resident, next, `造神计划：${resident.name}#${resident.id}（属性 ${sum}/70）练满${labels[room.trainStat]}，转练${labels[next.trainStat]} → ${roomName(next)}。`);
+        } else {
+          // 下一项训练室全满：不再空占当前训练位，先去门外休息区，
+          // 等有对应属性的训练空位时再由优先训练补回。
+          move(resident, null, `造神计划：${resident.name}#${resident.id}（属性 ${sum}/70）练满${labels[room.trainStat]}，暂无下一项训练空位，先到门外休息区等待。`);
+        }
+        moved++;
+      }
+      if (!moved) break;
     }
   }
 
   // 优先训练：把未满 70 的在岗居民和门外休息区居民按属性总和从高到低补进剩余训练空位。
   // 待改名/待遣散的新人、等待再次派出的归来者由 excludedIds 排除，继续留在门外。
-  const candidates = workers.filter(resident => {
+  // 快速检查只处理训练室里已练满的居民，不重新补人，避免每 30 秒大面积调动。
+  const candidates = onlyFinishedTraining || onlyIdleJobs ? [] : workers.filter(resident => {
     const roomId = positions.get(resident.id);
     if (roomId !== null) {
       const room = rooms.find(item => item.id === roomId);
@@ -126,6 +153,16 @@ function planShelterGod(view, excludedIds = new Set()) {
       if (critical.some(key => before[key] >= 0 && after[key] < 0)) continue;
     }
     move(resident, room, `造神计划：${resident.name}#${resident.id}（属性 ${total(resident)}/70）优先训练 → ${roomName(room)}。`);
+  }
+  // 练满 70 但仍留在门外休息区的居民：生产岗位出现空位时补进去，
+  // 避免从训练室撤出后长期闲置。由托管在大门值守之后单独执行，守门优先选人。
+  if (onlyIdleJobs) {
+    for (const resident of workers) {
+      if (positions.get(resident.id) !== null) continue;
+      if (pendingParents.has(resident.id) || excludedIds.has(resident.id) || total(resident) < 70) continue;
+      const job = chooseJob(resident);
+      if (job) move(resident, job, `造神计划：${resident.name}#${resident.id} 属性已满 70，从休息区补进 ${roomName(job)}。`);
+    }
   }
   return { assignments, parents };
 }
