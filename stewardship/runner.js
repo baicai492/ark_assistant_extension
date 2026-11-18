@@ -1,4 +1,4 @@
-function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, rescueCount, rescueEnabled, rescueMode, godEnabled, birthEnabled) {
+function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, rescueCount, rescueEnabled, rescueMode, godEnabled, birthEnabled, questEnabled) {
   const previous = globalThis.__fengbaoShelterAuto;
   if (previous?.running) return;
   if (!Number.isInteger(intervalSeconds) || intervalSeconds < 1 || !Number.isInteger(recallEvents) || recallEvents < 1) throw new Error('间隔和事件次数必须为正整数');
@@ -10,10 +10,49 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   const keys = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'];
   if (dismissStatEnabled && !Object.hasOwn(statLabels, dismissStatKey)) throw new Error('请选择单项遣散的指定属性');
   if (dismissStatEnabled && (!Number.isInteger(dismissStat) || dismissStat < 1 || dismissStat > 10)) throw new Error('单项属性遣散阈值必须为 1–10 的整数');
-  const task = { running: true, stopRequested: false, intervalSeconds, rescueEnabled, rescueMode, rescueCount, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, godEnabled, birthEnabled: Boolean(birthEnabled), logs: previous?.logs ?? [], message: '正在开启托管…', nextAt: null, pendingDispatch: previous?.pendingDispatch ?? {}, newcomers: previous?.newcomers ?? [], knownIds: previous?.knownIds ?? null, deployments: previous?.deployments ?? {}, autoParents: previous?.autoParents ?? [], autoAssigned: previous?.autoAssigned ?? [], autoPairs: previous?.autoPairs ?? [], questRetries: previous?.questRetries ?? {} };
+  const task = { running: true, stopRequested: false, intervalSeconds, rescueEnabled, rescueMode, rescueCount, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, godEnabled, birthEnabled: Boolean(birthEnabled), questEnabled: Boolean(questEnabled), logs: previous?.logs ?? [], message: '正在开启托管…', nextAt: null, pendingDispatch: previous?.pendingDispatch ?? {}, newcomers: previous?.newcomers ?? [], knownIds: previous?.knownIds ?? null, deployments: previous?.deployments ?? {}, autoParents: previous?.autoParents ?? [], autoAssigned: previous?.autoAssigned ?? [], autoPairs: previous?.autoPairs ?? [], pairAttempts: previous?.pairAttempts ?? {}, pairFailedUntil: previous?.pairFailedUntil ?? {}, recentEvictions: previous?.recentEvictions ?? {}, pairLogAt: previous?.pairLogAt ?? {}, evictCounts: previous?.evictCounts ?? {}, evictHoldUntil: previous?.evictHoldUntil ?? {}, questRetries: previous?.questRetries ?? {}, questWeek: previous?.questWeek ?? null, questDone: previous?.questDone ?? [], questStartBlocked: previous?.questStartBlocked ?? {}, questLogAt: previous?.questLogAt ?? {}, questDoneNotice: previous?.questDoneNotice ?? false };
+  // 配对记录在服务端短暂换房时保留的宽限期；超过后放弃这对并冷却，
+  // 避免同一批居民每 30 秒被“撤出宿舍 → 重新配对”来回搬。
+  const pairGraceMs = 2 * 60000;
+  const pairRetryMs = 30 * 60000;
+  // 配对失败后两人也暂停同样长的时间，避免换个人重新配对、继续来回搬宿舍。
+  const pairPauseMs = 30 * 60000;
+  const evictGuardMs = 2 * 60000;
+  // 同一居民短时间被反复放回宿舍时，调出几次后先停手，避免和游戏来回拉扯。
+  const evictRepeatWindowMs = 15 * 60000;
+  const evictHoldMs = 30 * 60000;
+  const evictRepeatLimit = 3;
   task.incidentSnapshot = previous?.incidentSnapshot ?? null;
   globalThis.__fengbaoShelterAuto = task;
-  const log = message => { task.logs.push(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${message}`); if (task.logs.length > 2000) task.logs.shift(); task.message = message; };
+  // 日志直接写入扩展本地存储（注入脚本与 content script 同处扩展隔离环境），
+  // 不依赖页面是否刷新过；仍然加载了日志桥接脚本时只在拿不到存储 API 时回退。
+  const logStorage = globalThis.chrome?.storage?.local;
+  let logBuffer = [];
+  let logTimer = 0;
+  let logWrite = Promise.resolve();
+  const flushLogs = () => {
+    logTimer = 0;
+    if (!logBuffer.length || !logStorage) return;
+    const batch = logBuffer;
+    logBuffer = [];
+    logWrite = logWrite.then(async () => {
+      const { shelterLogs = [] } = await logStorage.get('shelterLogs');
+      await logStorage.set({ shelterLogs: shelterLogs.concat(batch) });
+    }).catch(() => {});
+  };
+  const log = message => {
+    const line = `[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${message}`;
+    task.logs.push(line);
+    if (task.logs.length > 2000) task.logs.shift();
+    task.message = message;
+    if (logStorage) {
+      logBuffer.push(line);
+      if (!logTimer) logTimer = setTimeout(flushLogs, 400);
+    } else {
+      // 兼容无法访问存储 API 的注入环境：交给页面里的日志桥接脚本。
+      try { globalThis.window?.postMessage({ src: 'fengbao-shelter-log', type: 'log', line }, globalThis.location?.origin ?? '*'); } catch {}
+    }
+  };
   const stopped = () => task.stopRequested;
   const fatal = message => Object.assign(new Error(message), { fatal: true });
   const stopError = () => Object.assign(new Error('托管已停止'), { stopped: true });
@@ -119,12 +158,88 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   }
   // 与配对面板一致：6 人宿舍可以同时容纳两组生育，1 格宿舍只能一组。
   function pairCapacity(room) { return Math.min(2, room.width); }
+  // 房间床位按游戏容量计算（宽度 ×2，最多 6）。儿童和外出居民同样占床位，
+  // 只按住家成人计算会让宿舍超员，服务端随后把刚放进去的人移出来。
+  function occupiedBeds(roomId) {
+    return view.state.residents.filter(resident => resident.roomId === roomId && resident.deadAt === null).length;
+  }
+  function pairKey(left, right) {
+    return `${Math.min(left.id, right.id)}-${Math.max(left.id, right.id)}`;
+  }
+  function pairCooldown(left, right) {
+    return task.pairAttempts[pairKey(left, right)]?.until ?? 0;
+  }
+  function pairPaused(resident) {
+    return (task.pairFailedUntil[resident.id] ?? 0) > view.serverTime;
+  }
+  // 清理过期记录，避免托管长时间运行时对象一直变大。
+  function prunePairState(now) {
+    for (const [id, until] of Object.entries(task.pairFailedUntil)) {
+      if (!(until > now)) delete task.pairFailedUntil[id];
+    }
+    for (const [key, attempt] of Object.entries(task.pairAttempts)) {
+      if (!(attempt?.until > now)) delete task.pairAttempts[key];
+    }
+    for (const [id, at] of Object.entries(task.recentEvictions)) {
+      if (!(at + evictGuardMs > now)) delete task.recentEvictions[id];
+    }
+    for (const [key, at] of Object.entries(task.pairLogAt)) {
+      if (!(at + 10 * 60000 > now)) delete task.pairLogAt[key];
+    }
+    for (const [id, entry] of Object.entries(task.evictCounts)) {
+      if (!(entry?.at + evictRepeatWindowMs > now)) delete task.evictCounts[id];
+    }
+    for (const [id, until] of Object.entries(task.evictHoldUntil)) {
+      if (!(until > now)) delete task.evictHoldUntil[id];
+    }
+  }
   function freePairSlots(room) {
     const list = adultsIn(room.id);
     // 房内还有未配对的成人时不再安排，避免服务端把新居民和房里的人凑成一对。
     if (list.some(resident => !hasPartner(resident, list))) return 0;
-    const freeAdults = room.width * 2 - list.length;
-    return Math.max(0, Math.min(pairCapacity(room) - pairsInRoom(room.id), Math.floor(freeAdults / 2)));
+    const freeBeds = Math.min(6, room.width * 2) - occupiedBeds(room.id);
+    return Math.max(0, Math.min(pairCapacity(room) - pairsInRoom(room.id), Math.floor(freeBeds / 2)));
+  }
+  // 服务端偶尔会在两次检查之间把刚安排的两人短暂移出宿舍或换房。只要宿舍里
+  // 现有的全 10 居民本身就能两两配对，直接按现状登记为配对，避免他们先被
+  // 清理流程撤出、又被自动生育拉回，形成每 30 秒一次的来回调动。
+  function adoptCoLocatedPairs(pendingParents, questTeams, pairing) {
+    const now = view.serverTime;
+    const rooms = view.state.rooms.filter(room => room.type === 'quarters' && room.builtAt <= now &&
+      room.upgradeAt === null && !room.incident);
+    for (const room of rooms) {
+      if (stopped()) return;
+      let capacity = pairCapacity(room) - pairsInRoom(room.id);
+      if (capacity <= 0) continue;
+      const residents = view.state.residents.filter(resident =>
+        resident.roomId === room.id && resident.deadAt === null && resident.away === null &&
+        resident.adultAt <= now && !resident.romance && !(resident.familyCooldownUntil > now) &&
+        resident.happiness >= 50 && keys.every(key => resident.stats[key] === 10) &&
+        !pendingParents.has(resident.id) && !questTeams.has(resident.id) &&
+        !task.pendingDispatch[resident.id] && !pairing.has(resident.id) && !pairPaused(resident))
+        .sort((left, right) => left.id - right.id);
+      const used = new Set();
+      for (const left of residents) {
+        if (capacity <= 0) break;
+        if (used.has(left.id)) continue;
+        const right = residents.find(candidate => !used.has(candidate.id) && candidate.id !== left.id &&
+          !related(left, candidate) && pairCooldown(left, candidate) <= now);
+        if (!right) continue;
+        used.add(left.id);
+        used.add(right.id);
+        pairing.add(left.id);
+        pairing.add(right.id);
+        task.autoPairs.push({ roomId: room.id, ids: [left.id, right.id] });
+        if (!task.autoParents.includes(left.id)) task.autoParents.push(left.id);
+        if (!task.autoParents.includes(right.id)) task.autoParents.push(right.id);
+        capacity--;
+        const key = pairKey(left, right);
+        if (!task.pairLogAt[key]) {
+          task.pairLogAt[key] = now;
+          log(`自动生育：${left.name} ＋ ${right.name} 已在${room.floor} 层 ${room.level} 级宿舍（房间 ${room.id}），继续培养感情。`);
+        }
+      }
+    }
   }
   // 与游戏一致：人口 = 存活居民 + 待产，人口上限 = 已建成宿舍的宽度 ×(2+2×等级)，最高 200。
   function populationState() {
@@ -139,22 +254,24 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   // 自动生育的子代按造神计划处理：属性总和未满 70 的优先训练，按总和从高到低排队。
   async function autoBirth(quiet = false) {
     const now = view.serverTime;
+    prunePairState(now);
     const { living, capacity, full } = populationState();
     if (full) { if (!quiet) log(`自动生育：人口已满（${living}/${capacity}），本轮不安排新配对。`); return; }
     const pendingParents = new Set(view.state.births.flatMap(birth => birth.parents));
+    const pairing = new Set(task.autoPairs.flatMap(pair => pair.ids));
     const byId = new Map(view.state.residents.map(resident => [resident.id, resident]));
-    // 已经建立感情、尚未待产的配对每对会占 1 个出生名额；不预留的话，
-    // 感情 100% 时会撞上人口上限，只能显示“人口已满，等待空位”。
+    // 已经建立感情的配对都会占用 1 个出生名额，包括冷却中、心情不足或房间出事的；
+    // 这些配对之后仍可能再要孩子。只按“当前可以生育”统计会让新配对超卖名额，
+    // 感情满时就会撞上人口上限，只能显示“人口已满，等待空位”。
     const reserved = new Set();
     for (const resident of view.state.residents) {
       if (resident.deadAt !== null || resident.away !== null || resident.adultAt > now || !resident.romance) continue;
       const partner = byId.get(resident.romance.partnerId);
-      if (!partner || partner.romance?.partnerId !== resident.id || resident.id > partner.id) continue;
+      if (!partner || partner.deadAt !== null || partner.romance?.partnerId !== resident.id || resident.id > partner.id) continue;
+      // 待产中的这对已经计入人口（living 包含 births），不再重复预留。
       if (pendingParents.has(resident.id) || pendingParents.has(partner.id)) continue;
-      if (resident.familyCooldownUntil > now || partner.familyCooldownUntil > now) continue;
       const room = view.state.rooms.find(item => item.id === resident.roomId);
-      if (!room || room.type !== 'quarters' || partner.roomId !== room.id || room.builtAt > now || room.incident) continue;
-      if (resident.happiness < 50 || partner.happiness < 50) continue;
+      if (!room || room.type !== 'quarters' || partner.roomId !== room.id || room.builtAt > now) continue;
       reserved.add(`${Math.min(resident.id, partner.id)}-${Math.max(resident.id, partner.id)}`);
     }
     // 刚安排进宿舍、服务端感情还没建立的配对同样要预留名额。
@@ -186,6 +303,12 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         // 本周任务小队成员在领取前不参与配对。
         !questTeams.has(resident.id) &&
         !resident.romance && !(resident.familyCooldownUntil > now) && resident.happiness >= 50 &&
+        // 刚被宿舍清理撤出的居民先在工作岗位/门外稳定一段时间，避免同一轮里
+        // 撤出后又被配对拉回宿舍；配对失败过的居民也暂停一段时间再尝试。
+        !(task.recentEvictions[resident.id] > now - evictGuardMs) && !pairPaused(resident) &&
+        // 已经登记配对的居民即使暂时被服务端移出宿舍，也不要立刻重新配对；
+        // 宽限期结束仍未同房会在 returnParents 里放弃并进入冷却。
+        !pairing.has(resident.id) &&
         !pendingParents.has(resident.id) && keys.every(key => resident.stats[key] === 10) &&
         // 自动生育的子代成年后去训练/工作岗位，不再次拉回宿舍生育。
         !(resident.parents.length === 2 && resident.parents.every(id => autoParents.has(id)));
@@ -196,7 +319,8 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     for (const left of candidates) {
       if (pairs.length >= limit) break;
       if (used.has(left.id)) continue;
-      const right = candidates.find(candidate => !used.has(candidate.id) && candidate.id !== left.id && !related(left, candidate));
+      const right = candidates.find(candidate => !used.has(candidate.id) && candidate.id !== left.id &&
+        !related(left, candidate) && pairCooldown(left, candidate) <= now);
       if (!right) continue;
       used.add(left.id);
       used.add(right.id);
@@ -310,20 +434,41 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       }
     }
   }
-  // 生育完成（进入待产或已经出生）后，父母立即回到生产岗位并穿戴对应装备；
+  // 孩子出生后，父母立即回到生产岗位并穿戴对应装备；待产中的父母由服务端
+  // 固定在生育宿舍里，撤出后下一轮又会被放回，因此等出生（进入家庭冷却）后再回岗。
   // 还在宿舍培养感情的配对继续保留。待产记录和家庭冷却都在服务端状态里，刷新面板后同样有效。
   async function returnParents() {
+    const now = view.serverTime;
+    prunePairState(now);
     const pending = new Set(view.state.births.flatMap(birth => birth.parents));
-    task.autoPairs = task.autoPairs.filter(pair => {
+    const survivors = [];
+    for (const pair of task.autoPairs) {
       const [left, right] = pair.ids.map(id => view.state.residents.find(item => item.id === id));
-      const room = view.state.rooms.find(item => item.id === pair.roomId);
-      if (!left || !right || left.deadAt !== null || right.deadAt !== null) return false;
-      // 配对人员被调离宿舍或房间变化时作废，下一轮重新配对。
-      if (!room || room.type !== 'quarters' || left.roomId !== pair.roomId || right.roomId !== pair.roomId) return false;
+      if (!left || !right || left.deadAt !== null || right.deadAt !== null) continue;
       // 任一人已待产或已进入家庭冷却，说明配对完成，父母可以离开宿舍。
-      const done = resident => pending.has(resident.id) || resident.familyCooldownUntil > view.serverTime;
-      return !(done(left) || done(right));
-    });
+      const done = resident => pending.has(resident.id) || resident.familyCooldownUntil > now;
+      if (done(left) || done(right)) continue;
+      const room = view.state.rooms.find(item => item.id === pair.roomId);
+      const together = room && room.type === 'quarters' &&
+        left.roomId === pair.roomId && right.roomId === pair.roomId;
+      if (together) {
+        pair.missedAt = null;
+        survivors.push(pair);
+        continue;
+      }
+      // 服务端结算时可能暂时搬动刚安排的居民。宽限期内保留配对记录，
+      // 既不把他们撤出、也不重新配对；超过宽限期才放弃这次配对。
+      pair.missedAt = pair.missedAt ?? now;
+      if (now - pair.missedAt < pairGraceMs) {
+        survivors.push(pair);
+        continue;
+      }
+      // 这对暂时配不成：冷却一段时间，期间两人正常工作/休息，不再进出宿舍。
+      task.pairAttempts[pairKey(left, right)] = { at: now, until: now + pairRetryMs, roomId: pair.roomId };
+      for (const resident of [left, right]) task.pairFailedUntil[resident.id] = now + pairPauseMs;
+      log(`自动生育：${left.name} ＋ ${right.name} 未能留在同一间宿舍，暂停这对配对，稍后再试。`);
+    }
+    task.autoPairs = survivors;
     const pairing = new Set(task.autoPairs.flatMap(pair => pair.ids));
     const questTeams = questTeamIds();
     const candidates = view.state.residents.filter(resident => {
@@ -333,8 +478,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       if (resident.deadAt !== null || resident.away !== null || resident.adultAt > view.serverTime) return false;
       const room = view.state.rooms.find(item => item.id === resident.roomId);
       if (room && room.type !== 'quarters') return false;
-      // 待产父母，或孩子已出生、正处于家庭冷却的父母。
-      return pending.has(resident.id) || resident.familyCooldownUntil > view.serverTime;
+      // 待产父母由服务端固定在生育宿舍，必须等孩子出生后再回岗；这里只处理
+      // 孩子已经出生、处于家庭冷却的父母。
+      return !pending.has(resident.id) && resident.familyCooldownUntil > view.serverTime;
     }).sort((left, right) => left.id - right.id);
     for (const member of candidates) {
       if (stopped()) return;
@@ -347,22 +493,35 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       log(`自动生育：${resident.name} 生育完成，回到${room.floor} 层 ${room.level} 级${roomLabels[room.type] ?? room.type}（房间 ${room.id}）。`);
     }
   }
-  // 宿舍只留给生育流程：人口已满时宿舍不再培养感情，全 10 也全部撤出；
+  // 宿舍只留给生育流程：人口已满时未配对的居民全部撤出；
   // 人口未满时只保留全 10（正在配对、已有感情、待产或家庭冷却中的居民），
   // 非全 10 的成人（包括非全 10 的感情配对）一律不能留在宿舍。
+  // 例外是已经配上对的居民：游戏会把感情已满的配对保留在 100%，人口空位出现后
+  // 立即安排待产；撤出后不会自动回来，反而错过空位。待产父母同样必须留在宿舍，
+  // 否则服务端下一轮又把它们放回来，造成每 30 秒反复进出。
   // 撤出时有生产空位就去岗位，没有空位直接去门外休息区，不再留在宿舍。
   async function evictNonGodAdults() {
     const now = view.serverTime;
+    prunePairState(now);
     const { full } = populationState();
+    const pendingParents = new Set(view.state.births.flatMap(birth => birth.parents));
     const pairing = new Set(task.autoPairs.flatMap(pair => pair.ids));
     const questTeams = questTeamIds();
+    // 人口未满时，宿舍里已经能两两配对的全 10 居民直接登记为配对并留下，
+    // 避免因为临时配对记录丢失，把他们撤出去后又被自动生育拉回来。
+    if (!full) adoptCoLocatedPairs(pendingParents, questTeams, pairing);
     const candidates = view.state.residents.filter(resident => {
       if (resident.deadAt !== null || resident.away !== null || resident.adultAt > now) return false;
       if (task.pendingDispatch[resident.id] || questTeams.has(resident.id)) return false;
       const room = view.state.rooms.find(item => item.id === resident.roomId);
       if (room?.type !== 'quarters') return false;
-      // 人口已满：不再培养感情，宿舍里的居民全部撤出。
-      if (full) return true;
+      // 同一居民短时间被反复放回宿舍时先停手，避免每 30 秒调出一次。
+      if (task.evictHoldUntil[resident.id] > now) return false;
+      // 待产父母必须留在宿舍等孩子出生，孩子出生后再由 returnParents 安排回岗。
+      if (pendingParents.has(resident.id)) return false;
+      // 人口已满：感情已经 100% 的配对被游戏固定在宿舍等待人口空位，反复调出
+      // 会被服务端放回并造成来回切换，这里不再处理；其余配对和未配对居民撤出。
+      if (full) return !(resident.romance && resident.romance.progress >= 1);
       // 非全 10：没有生育资格，待产/冷却中也不能继续占用宿舍。
       if (!keys.every(key => resident.stats[key] === 10)) return true;
       // 全 10 的居民留在宿舍：感情冷却中、正在配对或已有感情，继续积累感情。
@@ -384,15 +543,25 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       if (resident.roomId === target) continue;
       if (!await act({ type: 'assign', residentId: resident.id, roomId: target })) return;
       if (view.state.residents.find(item => item.id === resident.id)?.roomId !== target) throw new Error('居民调离宿舍结果未确认');
+      task.recentEvictions[resident.id] = view.serverTime;
+      const last = task.evictCounts[resident.id];
+      const count = last && last.at + evictRepeatWindowMs > view.serverTime ? last.count + 1 : 1;
+      task.evictCounts[resident.id] = { at: view.serverTime, count };
       log(choice
         ? `自动生育：${resident.name} ${reason}，安排到 ${choice.floor} 层${roomLabels[choice.type] ?? choice.type}（房间 ${choice.id}）。`
         : `自动生育：${resident.name} ${reason}，暂无生产空位，先移到门外休息区。`);
+      // 服务端连续把同一居民放回宿舍时，不再每轮都调出，先让他留在原处。
+      if (count >= evictRepeatLimit) {
+        task.evictHoldUntil[resident.id] = view.serverTime + evictHoldMs;
+        log(`自动生育：${resident.name} 多次被放回宿舍，暂时不再调出，避免来回切换。`);
+      }
     }
   }
   // 已经建立感情关系但被调到不同宿舍的两人，重新安排到同一间宿舍继续积累感情；
   // 待产或家庭冷却中的不处理。优先使用成员当前所在的宿舍。
   async function reuniteCouples() {
-    // 人口已满时不再培养感情，宿舍里的居民由宿舍清理流程撤出。
+    // 人口已满时不再培养感情；感情已经 100% 的配对由游戏保持在宿舍等待空位，
+    // 其余宿舍居民交给宿舍清理流程处理。
     if (populationState().full) return;
     const now = view.serverTime;
     const byId = new Map(view.state.residents.map(resident => [resident.id, resident]));
@@ -420,7 +589,8 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       if (current?.type === 'quarters' && resident.roomId === partner.roomId) continue;
       const fits = room => {
         const list = adultsIn(room.id);
-        if (room.width * 2 - list.length < 2) return false;
+        const moving = members.filter(member => member.roomId !== room.id).length;
+        if (Math.min(6, room.width * 2) - occupiedBeds(room.id) < moving) return false;
         if (pairsInRoom(room.id) >= pairCapacity(room)) return false;
         // 房内不能有其他未配对的成人，避免服务端把新来的人和别人凑成一对。
         return !list.some(item => !members.some(member => member.id === item.id) && !hasPartner(item, list));
@@ -535,6 +705,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       // 人口未满时，全 10 且有感情的门外居民留给宿舍培养（由 reuniteCouples 拉回）；
       // 非全 10 的感情关系没有生育资格，可以直接安排工作岗位。
       !(!full && keys.every(key => resident.stats[key] === 10) && resident.romance) &&
+      // 人口已满时，感情 100% 的配对被游戏放回宿舍等待空位；暂时留在门外时
+      // 也不要再安排岗位，避免刚安排完又被服务端放回，形成来回切换。
+      !(full && resident.romance && resident.romance.progress >= 1) &&
       !(resident.familyCooldownUntil > now) &&
       !pendingParents.has(resident.id) && !pairing.has(resident.id))
       .sort((left, right) => left.id - right.id);
@@ -551,8 +724,168 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   }
   // 本周废土任务：小队到家后领取。完成的任务不再重试，队员回到训练、生育、工作等正常调度；
   // 失败的任务记录原班人马，随后按同样的队伍重新派出。任务领取前，小队成员在其他调度中全部排除。
+  // 自动周常开启时，还会把休息区（门外）闲置居民按等级从高到低每 3 人编成一队，
+  // 出发前换上对任务战力提升最大的武器和服装，派往尚未完成的本周任务；游戏最多同时 2 支小队。
+  // 进行中的小队不提前召回，事件处理中暂停新的派出。
+  function residentLevel(resident) {
+    return Math.min(50, 1 + Math.floor(Math.sqrt(Math.max(0, Number(resident.xp) || 0) / 3)));
+  }
+  function residentMaxHp(resident) {
+    return Math.round(100 + (residentLevel(resident) - 1) * (2 + 0.5 * (Number(resident.stats.end) || 0)));
+  }
+  // 与游戏一致：任务战力 = 等级 ×2 + 力量 + 耐力 + 敏捷 + 武器伤害；
+  // 服装加成按属性计入并在 17 封顶，只有力量、耐力、敏捷对任务战力有用。
+  function questPower(resident) {
+    const items = view.state.items ?? [];
+    const outfit = resident.outfitId != null ? items.find(item => item.id === resident.outfitId) : null;
+    const weapon = resident.weaponId != null ? items.find(item => item.id === resident.weaponId) : null;
+    const stat = key => Math.min(17, (Number(resident.stats[key]) || 0) + (Number(outfit?.bonus?.[key]) || 0));
+    const damage = Array.isArray(weapon?.damage) ?
+      (Number(weapon.damage[0]) || 0) + (Number(weapon.damage[1]) || 0) : 0;
+    return 2 * residentLevel(resident) + stat('str') + stat('end') + stat('agi') + damage;
+  }
+  // 游戏要求任务队员在家、成年且血量不低于上限的 50%。
+  function questReady(resident) {
+    return resident.deadAt === null && resident.away === null &&
+      resident.adultAt <= view.serverTime && Number(resident.hp) >= 0.5 * residentMaxHp(resident);
+  }
+  // 休息区（门外）闲置居民：没有房间、在家、成年；排除等待再次派出的探险归来者、
+  // 电台待改名新人、正在任务中的队员、自动生育配对，以及感情已满等待出生空位的配对。
+  function questIdleResidents() {
+    const questTeams = questTeamIds();
+    const pairing = new Set(task.autoPairs.flatMap(pair => pair.ids));
+    return view.state.residents.filter(resident =>
+      resident.roomId === null && questReady(resident) &&
+      !task.pendingDispatch[resident.id] &&
+      !task.newcomers.includes(resident.id) && !questTeams.has(resident.id) &&
+      !pairing.has(resident.id) &&
+      // 本轮刚在门外出现、还没走新人检查/改名的电台新居民先不派出。
+      !(resident.parents.length === 0 && task.knownIds && !task.knownIds.includes(resident.id)) &&
+      // 感情满的配对待产或等待人口空位，不派去长时间任务，避免打断生育流程。
+      !(resident.romance && resident.romance.progress >= 1)
+    ).sort((left, right) => residentLevel(right) - residentLevel(left) ||
+      questPower(right) - questPower(left) || left.id - right.id);
+  }
+  function weaponDamage(item) {
+    return Array.isArray(item?.damage) ?
+      (Number(item.damage[0]) || 0) + (Number(item.damage[1]) || 0) : 0;
+  }
+  // 服装对任务战力的实际提升：只算力量、耐力、敏捷，并按游戏规则在 17 封顶。
+  function outfitGain(resident, current, item) {
+    return ['str', 'end', 'agi'].reduce((sum, key) => {
+      const base = Number(resident.stats[key]) || 0;
+      const before = Math.min(17, base + (Number(current?.bonus?.[key]) || 0));
+      const after = Math.min(17, base + (Number(item?.bonus?.[key]) || 0));
+      return sum + after - before;
+    }, 0);
+  }
+  // 可用装备：仓库里的，或穿在休息区闲置居民身上的；其他小队成员、
+  // 正在岗位、外出或倒下居民身上的装备不转交。
+  function questGearPool(slot, resident, teamIds) {
+    const field = slot === 'weapon' ? 'weaponId' : 'outfitId';
+    const owners = new Map();
+    for (const item of view.state.residents) {
+      if (item[field] != null) owners.set(item[field], item);
+    }
+    const idle = new Set(questIdleResidents().map(item => item.id));
+    return (view.state.items ?? []).filter(item => item?.slot === slot && Number.isFinite(item.tier))
+      .filter(item => {
+        const owner = owners.get(item.id);
+        if (!owner) return true;
+        if (owner.id === resident.id) return true;
+        // 其他小队成员的装备不互相扒，避免出发前反复换装。
+        if (teamIds.has(owner.id)) return false;
+        return owner.deadAt === null && owner.away === null && owner.adultAt <= view.serverTime &&
+          idle.has(owner.id);
+      });
+  }
+  // 只换能提高任务战力的装备；同提升幅度时优先等级高的。
+  async function equipQuestTeam(team) {
+    const teamIds = new Set(team.map(resident => resident.id));
+    const members = [...team].sort((left, right) => residentLevel(right) - residentLevel(left) ||
+      questPower(right) - questPower(left) || left.id - right.id);
+    for (const slot of ['weapon', 'outfit']) {
+      if (stopped()) return;
+      const field = slot === 'weapon' ? 'weaponId' : 'outfitId';
+      for (const member of members) {
+        if (stopped()) return;
+        let resident = view.state.residents.find(item => item.id === member.id);
+        if (!resident || resident.deadAt !== null || resident.away !== null) continue;
+        const currentId = resident[field];
+        const current = currentId != null ? (view.state.items ?? []).find(item => item.id === currentId) : null;
+        let best = null;
+        let bestGain = 0;
+        for (const item of questGearPool(slot, resident, teamIds)) {
+          if (item.id === currentId) continue;
+          const gain = slot === 'weapon' ? weaponDamage(item) - weaponDamage(current) : outfitGain(resident, current, item);
+          if (gain <= 0) continue;
+          if (!best || gain > bestGain ||
+              (gain === bestGain && (item.tier > best.tier ||
+                (item.tier === best.tier && item.id < best.id)))) {
+            best = item;
+            bestGain = gain;
+          }
+        }
+        if (!best) continue;
+        try {
+          if (!await act({ type: 'equip', residentId: resident.id, itemId: best.id, slot })) return;
+          resident = view.state.residents.find(item => item.id === resident.id);
+          if (!resident || resident[field] !== best.id) throw new Error('穿戴结果未确认');
+          log(`本周任务：${resident.name} 换上 ${best.tier} 级${best.name}（${slot === 'weapon' ? '武器' : '服装'}，任务战力 +${bestGain}）。`);
+        } catch (error) {
+          if (error.fatal || error.stopped) throw error;
+          log(`本周任务：${resident.name} 换装失败：${error.message}。`);
+          try { await read(); } catch (readError) { if (readError.fatal || readError.stopped) throw readError; }
+        }
+      }
+    }
+  }
+  // 三个人的任务小队才允许出发；装备后提交 quest_start，并核对返回的任务记录。
+  async function dispatchQuest(quest, team, retry = false) {
+    if (team.length < 3) return false;
+    if (task.questEnabled) await equipQuestTeam(team);
+    if (stopped()) return false;
+    const ids = team.map(resident => resident.id);
+    try {
+      if (!await act({ type: 'quest_start', questId: quest.id, team: ids })) return false;
+      const run = (view.state.quests ?? []).find(item => item.questId === quest.id &&
+        Array.isArray(item.team) && ids.every(id => item.team.includes(id)));
+      if (!run) throw new Error('任务派出结果未确认');
+      delete task.questStartBlocked[quest.id];
+      const members = ids.map(id => view.state.residents.find(resident => resident.id === id));
+      const names = members.map(resident => resident ?
+        `${resident.name}（${residentLevel(resident)} 级，战力 ${questPower(resident)}）` : `#${id}`).join('、');
+      log(`本周任务：${quest.title ?? quest.id} ${retry ? '已重新派出' : '已派出'}：${names}。`);
+      return true;
+    } catch (error) {
+      if (error.fatal || error.stopped) throw error;
+      // 失败后冷却一段时间再试，避免每 30 秒重复提交同一个任务。
+      task.questStartBlocked[quest.id] = view.serverTime + 10 * 60000;
+      log(`本周任务：${quest.title ?? quest.id} 派出失败：${error.message}，稍后再试。`);
+      try { await read(); } catch (readError) { if (readError.fatal || readError.stopped) throw readError; }
+      return false;
+    }
+  }
   async function handleWeeklyQuests() {
-    const titleOf = questId => (view.env?.quests ?? []).find(quest => quest.id === questId)?.title ?? questId;
+    const now = view.serverTime;
+    const definitions = Array.isArray(view.env?.quests) ? view.env.quests.filter(quest => quest?.id != null) : [];
+    const titleOf = questId => definitions.find(quest => quest.id === questId)?.title ?? questId;
+    // 新的一周重置本周任务的完成与重试记录，避免沿用上周的任务状态。
+    const week = view.env?.week ?? view.state.weekly?.week ?? null;
+    if (week && task.questWeek !== week) {
+      task.questWeek = week;
+      task.questDone = [];
+      task.questRetries = {};
+      task.questStartBlocked = {};
+      task.questLogAt = {};
+      task.questDoneNotice = false;
+    }
+    for (const [questId, until] of Object.entries(task.questStartBlocked)) {
+      if (!(until > now)) delete task.questStartBlocked[questId];
+    }
+    for (const [questId, at] of Object.entries(task.questLogAt)) {
+      if (!(at + 10 * 60000 > now)) delete task.questLogAt[questId];
+    }
     const runs = Array.isArray(view.state.quests) ? view.state.quests : [];
     for (const run of [...runs]) {
       if (stopped()) return;
@@ -569,26 +902,92 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       }
       log(failed ? `本周任务：${title} 失败，小队已回家，准备原班人马重试。` : `本周任务：${title} 完成，小队已回家。`);
       if (failed && team.length) task.questRetries[run.questId] = team;
+      // 服务端完成列表可能晚一拍更新，扩展自己记住本次完成的任务，避免领取后再次派出。
+      if (!failed && !task.questDone.includes(run.questId)) task.questDone.push(run.questId);
     }
+    const done = new Set([...(view.state.weekly?.completed ?? []), ...task.questDone]);
+    for (const questId of Object.keys(task.questRetries)) {
+      if (done.has(questId)) delete task.questRetries[questId];
+    }
+    const busy = Boolean(task.incidentSnapshot) || view.state.rooms.some(room => room.incident);
+    const idlePool = questIdleResidents();
+    const active = new Set((view.state.quests ?? []).map(run => run.questId));
+    const activeTeams = questTeamIds();
+    const claimed = new Set();
+    // 游戏同一时间只允许 2 支任务小队（进行中和返程中都计入），重试和派人共用这个上限。
+    const runningCount = () => (view.state.quests ?? [])
+      .filter(run => run.status === 'active' || run.status === 'returning').length;
+    // 失败任务优先重试：原班人马仍然可用时优先使用，人数不足 3 人时用休息区闲置居民补齐。
     for (const [questId, team] of Object.entries(task.questRetries)) {
       if (stopped()) return;
-      // 同任务已有进行中或待领取的小队时，等结算后再决定是否重试。
-      if (view.state.quests.some(run => run.questId === questId)) continue;
-      if ((view.state.weekly?.completed ?? []).includes(questId)) { delete task.questRetries[questId]; continue; }
-      const members = team.map(id => view.state.residents.find(resident => resident.id === id));
-      if (members.some(resident => !resident || resident.deadAt !== null || resident.away !== null ||
-          resident.adultAt > view.serverTime)) {
-        log(`本周任务：${titleOf(questId)} 原班人马不全，暂不重试。`);
+      if (done.has(questId)) { delete task.questRetries[questId]; continue; }
+      if (active.has(questId) || task.questStartBlocked[questId] > now || busy) continue;
+      if (runningCount() >= 2) break;
+      const members = [];
+      for (const id of team) {
+        if (members.length >= 3) break;
+        if (claimed.has(id)) continue;
+        const resident = view.state.residents.find(item => item.id === id);
+        if (!resident || activeTeams.has(resident.id) || !questReady(resident)) continue;
+        if (!members.some(item => item.id === resident.id)) members.push(resident);
+      }
+      for (const resident of [...idlePool]) {
+        // 未开启自动周常时不主动补新人，仍只用原班人马重试。
+        if (!task.questEnabled || members.length >= 3) break;
+        if (claimed.has(resident.id) || members.some(item => item.id === resident.id)) continue;
+        members.push(resident);
+      }
+      for (const resident of members) {
+        claimed.add(resident.id);
+        const index = idlePool.findIndex(item => item.id === resident.id);
+        if (index >= 0) idlePool.splice(index, 1);
+      }
+      if (members.length < 3) {
+        if (!task.questLogAt[questId]) {
+          task.questLogAt[questId] = now;
+          log(`本周任务：${titleOf(questId)} 现在只能凑齐 ${members.length} 人，等满 3 人再重试。`);
+        }
         continue;
       }
-      try {
-        if (!await act({ type: 'quest_start', questId, team })) return;
-        delete task.questRetries[questId];
-        log(`本周任务：${titleOf(questId)} 已按原班人马重新派出。`);
-      } catch (error) {
-        if (error.fatal || error.stopped) throw error;
-        log(`本周任务：${titleOf(questId)} 重试失败：${error.message}`);
+      const quest = definitions.find(item => item.id === questId) ?? { id: questId, title: titleOf(questId) };
+      if (!await dispatchQuest(quest, members, true)) {
+        if (stopped()) return;
+        continue;
       }
+      delete task.questRetries[questId];
+      active.add(questId);
+    }
+    const remaining = definitions.filter(quest => !done.has(quest.id));
+    if (task.questEnabled && definitions.length && !remaining.length && !task.questDoneNotice) {
+      task.questDoneNotice = true;
+      log('本周任务：全部完成，不再派出新的任务小队。');
+    }
+    if (!task.questEnabled || busy) return;
+    // 未完成、没有进行中/待领取小队、没有失败重试和冷却的任务，优先派等级要求最高的。
+    const pending = remaining.filter(quest => !active.has(quest.id) &&
+        !task.questRetries[quest.id] && !(task.questStartBlocked[quest.id] > now))
+      .sort((left, right) => (Number(right.recommendedLevel) || 0) - (Number(left.recommendedLevel) || 0) ||
+        (Number(right.difficulty) || 0) - (Number(left.difficulty) || 0) ||
+        String(left.id).localeCompare(String(right.id)));
+    // 休息区闲置居民按等级从高到低编组，同等级按战力，每组 3 人；游戏最多同时 2 支小队，
+    // 重试已经占用名额时这里相应少派。
+    let pendingIndex = 0;
+    while (pendingIndex < pending.length && idlePool.length >= 3) {
+      if (stopped()) return;
+      if (runningCount() >= 2) break;
+      const team = idlePool.splice(0, 3);
+      if (team.length < 3) break;
+      const quest = pending[pendingIndex++];
+      if (!await dispatchQuest(quest, team)) {
+        if (stopped()) return;
+        continue;
+      }
+      active.add(quest.id);
+    }
+    if (pendingIndex < pending.length && idlePool.length >= 3 && runningCount() >= 2 &&
+        !task.questLogAt.__questCap__) {
+      task.questLogAt.__questCap__ = now;
+      log('本周任务：已有 2 支小队在任务中，等有队伍回来再派新队。');
     }
   }
   // 快速检查：成年子代安排训练或工作、待产父母回岗、配对后补资源缺口、穿上装备，
@@ -852,12 +1251,19 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         log(`本轮${roundError ? '因临时错误跳过剩余步骤' : '完成'}，${intervalSeconds} 秒后开始下一轮。`);
         roundError = false;
         // 成年子代、待产父母和装备不必等完整间隔：等待期间每 30 秒快速检查一次。
+        // 只开自动周常时也每 30 秒检查任务到家和休息区闲置人员，及时编队出发。
         while (!stopped() && Date.now() < nextAt) {
           await wait(Math.min(30000, nextAt - Date.now()));
           if (stopped()) break;
-          if (!task.birthEnabled) continue;
+          if (!task.birthEnabled && !task.questEnabled) continue;
           try {
-            await quickCheck();
+            if (task.birthEnabled) {
+              await quickCheck();
+            } else {
+              await read();
+              if (stopped()) break;
+              await handleWeeklyQuests();
+            }
           } catch (error) {
             if (error.fatal) throw error;
             if (error.stopped || stopped()) break;
