@@ -249,6 +249,12 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           left.room.floor - right.room.floor || left.room.id - right.room.id);
       if (options.length) return options[0].room;
     }
+    // 没有缺口且零件工坊、废料回收站、医务室、电台都满员时，把空闲居民补进电力、
+    // 食物、净水等还有空位的生产房间，避免资源库存长期不满却有人留在门外。
+    const spare = rooms.filter(room => room.type !== 'radio')
+      .sort((left, right) => right.level - left.level || right.width - left.width ||
+        left.floor - right.floor || left.id - right.id);
+    if (spare.length) return spare[0];
     return rooms.filter(room => room.type === 'radio')
       .sort((left, right) => right.level - left.level || left.floor - right.floor || left.id - right.id)[0] ?? null;
   }
@@ -516,6 +522,8 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   // 安排到生产岗位。电台新居民保持门外；仍在任务中的成员、正在配对/待产/冷却的居民不处理。
   async function assignReturnedResidents() {
     const now = view.serverTime;
+    // 人口已满时不再培养感情，全 10 的门外居民也直接安排生产岗位。
+    const { full } = populationState();
     const pendingParents = new Set(view.state.births.flatMap(birth => birth.parents));
     const pairing = new Set(task.autoPairs.flatMap(pair => pair.ids));
     // 本周任务进行中的小队成员仍在门外，任务领取后才算归来。
@@ -524,9 +532,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     const outside = view.state.residents.filter(resident =>
       resident.deadAt === null && resident.away === null && resident.adultAt <= now && resident.roomId === null &&
       !task.pendingDispatch[resident.id] && !task.newcomers.includes(resident.id) && !questMembers.has(resident.id) &&
-      // 全 10 且有感情的门外居民留给宿舍培养（人口未满时由 reuniteCouples 拉回）；
+      // 人口未满时，全 10 且有感情的门外居民留给宿舍培养（由 reuniteCouples 拉回）；
       // 非全 10 的感情关系没有生育资格，可以直接安排工作岗位。
-      !(keys.every(key => resident.stats[key] === 10) && resident.romance) &&
+      !(!full && keys.every(key => resident.stats[key] === 10) && resident.romance) &&
       !(resident.familyCooldownUntil > now) &&
       !pendingParents.has(resident.id) && !pairing.has(resident.id))
       .sort((left, right) => left.id - right.id);
