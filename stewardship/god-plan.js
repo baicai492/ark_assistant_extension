@@ -99,13 +99,16 @@ function planShelterGod(view, excludedIds = new Set()) {
     }
   }
 
-  // 优先训练：把未满 70 的在岗居民按属性总和从高到低补进剩余训练空位。
+  // 优先训练：把未满 70 的在岗居民和门外休息区居民按属性总和从高到低补进剩余训练空位。
+  // 待改名/待遣散的新人、等待再次派出的归来者由 excludedIds 排除，继续留在门外。
   const candidates = workers.filter(resident => {
     const roomId = positions.get(resident.id);
-    if (roomId === null) return false;
-    const room = rooms.find(item => item.id === roomId);
-    if (!room || room.type === 'quarters' || room.type === 'storage' || room.type === 'training' || room.type === 'door') return false;
-    if (room.incident || pendingParents.has(resident.id) || total(resident) >= 70) return false;
+    if (roomId !== null) {
+      const room = rooms.find(item => item.id === roomId);
+      if (!room || room.type === 'quarters' || room.type === 'storage' || room.type === 'training' || room.type === 'door') return false;
+      if (room.incident) return false;
+    }
+    if (pendingParents.has(resident.id) || total(resident) >= 70) return false;
     // 刚被资源补缺、配对等流程搬过的居民本轮不再转岗，避免同一个人被连续搬两次。
     if (excludedIds.has(resident.id)) return false;
     return true;

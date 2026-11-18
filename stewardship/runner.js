@@ -1566,8 +1566,12 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
             // 救援快照归位完成后再调整训练岗位，避免新安排被快照覆盖。
             if (paused()) log('造神计划：事件处理中，暂停居民调动。');
             else {
-              // 资源补缺刚搬过的居民本轮不再被造神计划搬第二次。
-              const plan = planShelterGod(view, protectedIds());
+              // 资源补缺刚搬过的居民本轮不再被造神计划搬第二次；
+              // 待改名/待遣散的新人和等待再次派出的归来者留在门外，不参与训练补位。
+              const excluded = protectedIds();
+              for (const id of task.newcomers) excluded.add(id);
+              for (const id of Object.keys(task.pendingDispatch)) excluded.add(Number(id));
+              const plan = planShelterGod(view, excluded);
               log(`造神计划：检查完成，本轮 ${plan.assignments.length} 步调动。`);
               for (const { residentId, roomId, message } of plan.assignments) {
                 if (!await act({ type: 'assign', residentId, roomId })) break;
