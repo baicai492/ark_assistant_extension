@@ -31,6 +31,9 @@ const logHost = 'com.fengbao.shelter_log';
 const exportLogs = document.querySelector('#export-logs');
 const clearLogs = document.querySelector('#clear-logs');
 let tabId, running = false, polling, godCycle;
+// 与托管脚本保持一致：面板只读取并显示最近一段日志。
+const logLimit = 2000;
+let logSignature = '';
 
 clearLogs.addEventListener('click', async () => {
   await chrome.storage.local.remove('shelterLogs');
@@ -39,10 +42,19 @@ clearLogs.addEventListener('click', async () => {
     const task = globalThis.__fengbaoShelterAuto;
     if (task) task.logs = [];
   } }).catch(() => {});
-  // 本地日志文件也清空，下次写入从新日志开始。
-  await chrome.runtime.sendNativeMessage(logHost, { command: 'log', logs: [] }).catch(() => {});
+  // 本地日志文件通过后台队列清空，确保排在进行中的追加写入之后。
+  let clearedFile = true, clearError = '';
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'fengbao-shelter-log-clear' });
+    if (response?.error) { clearedFile = false; clearError = response.error; }
+  } catch (error) {
+    clearedFile = false;
+    clearError = error.message;
+  }
   logs.value = '';
-  status.textContent = '日志已清空。';
+  status.textContent = clearedFile
+    ? '日志已清空（含本地日志文件）。'
+    : `扩展日志已清空；本地日志文件清空失败${clearError ? `：${clearError}` : ''}。`;
 });
 // 自动写入项目目录由本地 host 负责；手动导出时由用户选择保存位置，
 // 不支持文件选择器的浏览器回退为普通下载。
@@ -176,8 +188,14 @@ async function refresh() {
   status.textContent = task?.message ?? '尚未开启托管。';
   if (running && task.nextAt && !task.stopRequested) status.textContent += ` 下次检查倒计时：${Math.max(0, Math.ceil((task.nextAt - Date.now()) / 1000))} 秒。`;
   const { shelterLogs = [], shelterLogStatus } = await chrome.storage.local.get(['shelterLogs', 'shelterLogStatus']);
-  const value = (shelterLogs.length ? shelterLogs : task?.logs ?? []).join('\n');
-  if (logs.value !== value) { logs.value = value; logs.scrollTop = logs.scrollHeight; }
+  const source = shelterLogs.length ? shelterLogs.slice(-logLimit) : task?.logs ?? [];
+  // 日志没变化时不再拼接和重写整个 textarea；否则面板每秒都要处理几十万字符。
+  const signature = `${source.length}:${source[source.length - 1] ?? ''}`;
+  if (signature !== logSignature) {
+    logSignature = signature;
+    const value = source.join('\n');
+    if (logs.value !== value) { logs.value = value; logs.scrollTop = logs.scrollHeight; }
+  }
   if (shelterLogStatus?.ok === false) logFile.textContent = `本地日志写入失败：${shelterLogStatus.error}`;
   // 每轮结束后 nextAt 才会更新，亲本信息随托管循环刷新，不再单独定时请求。
   if (running && godEnabled.checked && (godCycle === undefined || task.nextAt && godCycle !== task.nextAt)) {

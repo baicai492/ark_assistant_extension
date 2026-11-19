@@ -6,13 +6,15 @@
   globalThis.__fengbaoShelterLogBridge = true;
   let pending = [];
   let timer = 0;
+  // 与托管脚本保持一致：只保留最近一段日志，避免存储无限增长。
+  const logLimit = 2000;
   const flush = async () => {
     timer = 0;
     try {
       const { shelterLogs = [] } = await chrome.storage.local.get('shelterLogs');
       const batch = pending;
       pending = [];
-      await chrome.storage.local.set({ shelterLogs: shelterLogs.concat(batch) });
+      await chrome.storage.local.set({ shelterLogs: shelterLogs.concat(batch).slice(-logLimit) });
     } catch {}
   };
   window.addEventListener('message', event => {

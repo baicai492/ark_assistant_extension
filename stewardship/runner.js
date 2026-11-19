@@ -46,6 +46,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   // 日志直接写入扩展本地存储（注入脚本与 content script 同处扩展隔离环境），
   // 不依赖页面是否刷新过；仍然加载了日志桥接脚本时只在拿不到存储 API 时回退。
   const logStorage = globalThis.chrome?.storage?.local;
+  // 扩展存储只保留最近一段：历史无限增长会让托管、后台和面板越来越卡；
+  // 本地日志文件由 host 另行追加，不受这里的上限影响。
+  const logLimit = 2000;
   let logBuffer = [];
   let logTimer = 0;
   let logWrite = Promise.resolve();
@@ -56,7 +59,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     logBuffer = [];
     logWrite = logWrite.then(async () => {
       const { shelterLogs = [] } = await logStorage.get('shelterLogs');
-      await logStorage.set({ shelterLogs: shelterLogs.concat(batch) });
+      await logStorage.set({ shelterLogs: shelterLogs.concat(batch).slice(-logLimit) });
     }).catch(() => {});
   };
   const log = message => {
@@ -71,6 +74,15 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       // 兼容无法访问存储 API 的注入环境：交给页面里的日志桥接脚本。
       try { globalThis.window?.postMessage({ src: 'fengbao-shelter-log', type: 'log', line }, globalThis.location?.origin ?? '*'); } catch {}
     }
+  };
+  // “暂无空位、原地等待”这类状态每 30 秒都会重复出现；按居民节流，
+  // 避免上百人每人每轮写一行，把日志撑到几万行后拖慢存储和面板。
+  const quietLogAt = new Map();
+  const logQuiet = (key, message, intervalMs = 30 * 60000) => {
+    const now = Date.now();
+    if (now - (quietLogAt.get(key) ?? 0) < intervalMs) return;
+    quietLogAt.set(key, now);
+    log(message);
   };
   const stopped = () => task.stopRequested;
   const fatal = message => Object.assign(new Error(message), { fatal: true });
@@ -669,7 +681,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       // 宿舍里的待产父母即使没有生产空位也先去门外休息区，不继续占宿舍；
       // 已经在门外的待产父母没有空位就原地等待。
       if (!room && !(waitingBirth && fromDorm)) {
-        log(`自动生育：${resident.name}#${resident.id} ${waitingBirth ? '待产中，暂无生产空位，留在门外休息区' : '生育完成，暂无生产空位，留在原处等待'}。`);
+        logQuiet(`parent:${resident.id}`, `自动生育：${resident.name}#${resident.id} ${waitingBirth ? '待产中，暂无生产空位，留在门外休息区' : '生育完成，暂无生产空位，留在原处等待'}。`);
         continue;
       }
       const target = room?.id ?? null;
@@ -882,7 +894,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           room.upgradeAt === null && !room.incident && fits(room))
         .sort((left, right) => right.level - left.level || right.width - left.width || left.floor - right.floor || left.id - right.id);
       const room = rooms.find(item => item.id === resident.roomId) ?? rooms.find(item => item.id === partner.roomId) ?? rooms[0];
-      if (!room) { log(`自动生育：${resident.name}#${resident.id} ＋ ${partner.name}#${partner.id} 感情已建立但暂无可用宿舍，等待空位。`); continue; }
+      if (!room) { logQuiet(`reunite:${resident.id}`, `自动生育：${resident.name}#${resident.id} ＋ ${partner.name}#${partner.id} 感情已建立但暂无可用宿舍，等待空位。`); continue; }
       for (const member of members) {
         if (member.roomId === room.id) continue;
         if (!await act({ type: 'assign', residentId: member.id, roomId: room.id })) return;
@@ -966,7 +978,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       }
       // 没有训练空位时直接去生产岗位，不留在宿舍等待。
       const choice = chooseProductionRoom(resident);
-      if (!choice) { log(`造神计划：${resident.name}#${resident.id} 已成年，暂无训练或生产空位，下轮继续。`); continue; }
+      if (!choice) { logQuiet(`grown:${resident.id}`, `造神计划：${resident.name}#${resident.id} 已成年，暂无训练或生产空位，下轮继续。`); continue; }
       if (!await act({ type: 'assign', residentId: resident.id, roomId: choice.id })) return;
       if (view.state.residents.find(item => item.id === resident.id)?.roomId !== choice.id) throw new Error('成年居民安排结果未确认');
       task.autoAssigned.push(resident.id);
@@ -1083,7 +1095,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       const resident = view.state.residents.find(item => item.id === member.id);
       if (!resident || resident.deadAt !== null || resident.away !== null || resident.roomId !== null) continue;
       const choice = chooseProductionRoom(resident);
-      if (!choice) { log(`门外归来：${resident.name}#${resident.id} 暂无生产空位，留在门外等待。`); continue; }
+      if (!choice) { logQuiet(`outside:${resident.id}`, `门外归来：${resident.name}#${resident.id} 暂无生产空位，留在门外等待。`); continue; }
       if (!await act({ type: 'assign', residentId: resident.id, roomId: choice.id })) return;
       if (view.state.residents.find(item => item.id === resident.id)?.roomId !== choice.id) throw new Error('门外居民安排结果未确认');
       log(`门外归来：${resident.name}#${resident.id} 安排到 ${choice.floor} 层${roomLabels[choice.type] ?? choice.type}（房间 ${choice.id}）。`);
