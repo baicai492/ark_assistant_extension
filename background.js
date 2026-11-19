@@ -2,12 +2,23 @@ const focusPrefix = 'fengbao-overload-focus-';
 const awakePrefix = 'fengbao-overload-awake-';
 const shelterLogPrefix = 'fengbao-shelter-log-';
 const shelterLogHost = 'com.fengbao.shelter_log';
+// 扩展存储和面板只保留最近一段；发给 host 的也是最近一段快照，
+// host 会根据本地文件尾部去重后追加，本地文件本身持续累积。
+const shelterLogLimit = 2000;
+// 推送和清空都串行执行，避免多个 native host 进程同时写同一个日志文件。
+let shelterLogQueue = Promise.resolve();
+function queueShelterLogTask(task) {
+  const run = shelterLogQueue.then(task);
+  shelterLogQueue = run.catch(() => {});
+  return run;
+}
 
 async function stopShelterLog(tabId) {
   await chrome.alarms.clear(`${shelterLogPrefix}${tabId}`);
 }
 
-// 通过本地 native host 把日志写入插件目录的 logs/shelter.log。
+// 通过本地 native host 把日志快照追加写入插件目录的 logs/shelter.log。
+// host 自己会和文件尾部比对，只写新增行，所以重复发送快照不会产生重复日志。
 // 写入结果存到扩展存储，面板可以显示具体路径或失败原因。
 async function sendShelterLogs(logs) {
   try {
@@ -17,6 +28,18 @@ async function sendShelterLogs(logs) {
     try {
       await chrome.storage.local.set({ shelterLogStatus: { ok: false, error: error.message, at: Date.now() } });
     } catch {}
+  }
+}
+
+async function clearShelterLogs() {
+  try {
+    const response = await chrome.runtime.sendNativeMessage(shelterLogHost, { command: 'clear' });
+    await chrome.storage.local.set({ shelterLogStatus: { ok: true, file: response?.file ?? '', at: Date.now() } });
+  } catch (error) {
+    try {
+      await chrome.storage.local.set({ shelterLogStatus: { ok: false, error: error.message, at: Date.now() } });
+    } catch {}
+    throw error;
   }
 }
 
@@ -52,14 +75,23 @@ async function readPageLog(tabId) {
   }
 }
 
-// 每 30 秒写一次文件；同时读取页面内存日志，内容脚本未加载时也不会漏日志。
+// 每 30 秒把最近一段日志交给 host 追加；host 会去重，重复发送不会写重复行。
 async function pushShelterLog(tabId) {
   const page = await readPageLog(tabId);
   const { shelterLogs = [] } = await chrome.storage.local.get('shelterLogs');
-  const logs = mergeLogs(shelterLogs, page.logs);
+  // 先各自截断再合并，避免为了写最近一段而反复拷贝整份历史日志。
+  const logs = mergeLogs(shelterLogs.slice(-shelterLogLimit), (page.logs ?? []).slice(-shelterLogLimit)).slice(-shelterLogLimit);
   if (logs.length) await sendShelterLogs(logs);
   if (!page.running) await stopShelterLog(tabId);
 }
+
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message.type !== 'fengbao-shelter-log-clear') return;
+  (async () => {
+    await queueShelterLogTask(clearShelterLogs);
+  })().then(() => respond({ ok: true }), error => respond({ error: error.message }));
+  return true;
+});
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message.type !== 'fengbao-shelter-log-watch') return;
@@ -68,11 +100,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (!Number.isInteger(tabId) || tabId < 0) throw new Error('缺少标签页');
     if (message.running) {
       await chrome.alarms.create(`${shelterLogPrefix}${tabId}`, { periodInMinutes: 0.5 });
-      await pushShelterLog(tabId);
+      await queueShelterLogTask(() => pushShelterLog(tabId));
     } else {
       // 关闭托管时页面里可能还有最后几行没写入存储，稍等后取一次内存日志。
       await new Promise(resolve => setTimeout(resolve, 500));
-      await pushShelterLog(tabId);
+      await queueShelterLogTask(() => pushShelterLog(tabId));
       await stopShelterLog(tabId);
     }
   })().then(() => respond({ ok: true }), error => respond({ error: error.message }));
@@ -120,7 +152,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 
 chrome.alarms.onAlarm.addListener(async alarm => {
   if (alarm.name.startsWith(shelterLogPrefix)) {
-    void pushShelterLog(Number(alarm.name.slice(shelterLogPrefix.length)));
+    void queueShelterLogTask(() => pushShelterLog(Number(alarm.name.slice(shelterLogPrefix.length)))).catch(() => {});
     return;
   }
   const autoFocus = alarm.name.startsWith(focusPrefix);

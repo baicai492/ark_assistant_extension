@@ -13,15 +13,25 @@ function planShelterGod(view, excludedIds = new Set(), onlyFinishedTraining = fa
   const workers = residents.filter(resident => resident.away === null && resident.deadAt === null &&
     resident.adultAt <= now && !questTeams.has(resident.id));
   const positions = new Map(workers.map(resident => [resident.id, resident.roomId]));
+  // 岗位模型只构建一次；逐个居民重新构建会在快速检查里造成明显的整轮停顿。
+  const model = typeof workforceModel === 'function' ? workforceModel(view) : null;
+  // 各房间当前人数随 move 同步维护，避免每次找空位都重新遍历全部居民。
+  const occupancy = new Map();
+  for (const resident of workers) {
+    if (resident.roomId != null) occupancy.set(resident.roomId, (occupancy.get(resident.roomId) ?? 0) + 1);
+  }
   const assignments = [], parents = [];
   const roomName = room => `${room.type === 'training' ? `${labels[room.trainStat]}训练室` : names[room.type]}（${room.floor} 层，房间 ${room.id}）`;
   const availableTraining = rooms.filter(room => room.type === 'training' && room.builtAt <= now &&
     room.upgradeAt === null && !room.incident && !room.unpowered);
   const pendingParents = new Set((view.state.births ?? []).flatMap(birth => birth.parents));
-  const occupants = room => workers.filter(worker => positions.get(worker.id) === room.id);
-  const freeSlots = room => room.width * 2 - occupants(room).length;
+  const occupants = room => occupancy.get(room.id) ?? 0;
+  const freeSlots = room => room.width * 2 - occupants(room);
   function move(resident, room, message) {
     const roomId = room ? room.id : null;
+    const previous = positions.get(resident.id);
+    if (previous != null) occupancy.set(previous, Math.max(0, (occupancy.get(previous) ?? 1) - 1));
+    if (roomId != null) occupancy.set(roomId, (occupancy.get(roomId) ?? 0) + 1);
     assignments.push({ residentId: resident.id, roomId, message: message ?? `造神计划：${resident.name}#${resident.id} → ${room ? roomName(room) : '去休息'}。` });
     positions.set(resident.id, roomId);
   }
@@ -38,11 +48,10 @@ function planShelterGod(view, excludedIds = new Set(), onlyFinishedTraining = fa
   }
   // 练满 70 后的岗位：先补电力、食物、净水缺口，三项都为正收益时优先废料、再零件（保证废料不为负）、治疗针，最后电台。
   function chooseJob(resident) {
-    const free = room => room.width * 2 - workers.filter(worker => positions.get(worker.id) === room.id).length;
+    const free = room => room.width * 2 - occupants(room);
     const candidates = rooms.filter(room => names[room.type] && room.type !== 'training' && room.builtAt <= now &&
       room.upgradeAt === null && !room.incident && !room.unpowered && free(room) > 0);
-    if (typeof workforceModel === 'function') {
-      const model = workforceModel(view);
+    if (model) {
       const net = model.net(assignments);
       const deficits = ['power', 'food', 'water'].filter(key => net[key] < 0).sort((left, right) => net[left] - net[right]);
       // 缺口补齐后优先零件工坊，再废料回收站、医务室，最后电台；零件不能把废料吃成负数。
@@ -141,7 +150,6 @@ function planShelterGod(view, excludedIds = new Set(), onlyFinishedTraining = fa
     return true;
   }).sort((left, right) => total(right) - total(left) || left.id - right.id);
   // 训练不产出：抽人前先确认电力、食物、净水不会因此转负，保证资源缺口优先。
-  const model = typeof workforceModel === 'function' ? workforceModel(view) : null;
   const critical = ['power', 'food', 'water'];
   for (const resident of candidates) {
     const room = nextTraining(resident, null);
