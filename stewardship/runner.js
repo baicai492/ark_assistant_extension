@@ -1706,9 +1706,31 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
               task.incidentRoomId = incident.id;
               log(`发现避难所事件（房间 ${incident.id}），开始救援。`);
               if (rescueMode === 'auto') {
-                for (let count = 0; count < rescueCount; count++) {
-                  if (!await act({ type: 'rescue_incident', roomId: incident.id })) break;
-                  log(`事件救援：已执行 ${count + 1}/${rescueCount} 次一键救援（房间 ${incident.id}）。`);
+                // 游戏的一键救援每次最多拉 3 人，可以超过房间定员；扩展按用户设置的次数连续点击。
+                // 服务端若一次拉入更多人（或事件刚出现时游戏已自行集结），立即停止，避免越点人越多。
+                const occupantsNow = () => view.state.residents.filter(resident => resident.roomId === incident.id && resident.deadAt === null).length;
+                const capacity = incident.width * 2;
+                const start = occupantsNow();
+                if (start > capacity + rescueCount * 3) {
+                  log(`事件救援：房间 ${incident.id} 已有 ${start} 名居民（定员 ${capacity}），超过 ${rescueCount} 次一键救援最多能补的 ${rescueCount * 3} 人，判定游戏已自行集结，停止呼叫。`);
+                } else {
+                  for (let count = 0; count < rescueCount; count++) {
+                    if (stopped()) break;
+                    if (!view.state.rooms.find(room => room.id === incident.id)?.incident) break;
+                    const before = occupantsNow();
+                    if (!await act({ type: 'rescue_incident', roomId: incident.id })) break;
+                    const after = occupantsNow();
+                    const added = after - before;
+                    if (added > 3) {
+                      log(`事件救援：一键救援一次加入了 ${added} 人（游戏按钮上限为 3 人），已停止继续呼叫，避免把更多居民压进事件房间。`);
+                      break;
+                    }
+                    if (added <= 0) {
+                      log(`事件救援：本次呼叫没有新增救援者（房间 ${incident.id} 现有 ${after} 人），停止继续呼叫。`);
+                      break;
+                    }
+                    log(`事件救援：已执行 ${count + 1}/${rescueCount} 次一键救援（房间 ${incident.id}，本次加入 ${added} 人，现有 ${after} 人）。`);
+                  }
                 }
               } else {
                 // 灭火、堵漏由餐厅支援，其余战斗事件由发电站和武器工坊支援。

@@ -1,7 +1,7 @@
 // 自动穿戴服装：按居民当前房间所需的属性，给每人分配加成最高的服装。
-// 仓库里和穿着在“无岗位需求居民（宿舍、门外、儿童）”身上的服装可以重新分配；
-// 外出或倒下居民身上的服装无法转交，有岗位居民身上对岗位有用的服装也不抢，
-// 避免为了换装让正在工作的人光着。每轮只返回与现状不同的操作。
+// 服装是全局稀缺资源：混合属性服装（如耐力+力量）按“对各自岗位最有用”的居民排序分配，
+// 不再因为当前持有者能用就永久锁死；外出或倒下居民身上的服装无法转交。
+// 同分时优先大房间/高等级房间，其次保持当前持有者，避免每轮来回换装。每轮只返回与现状不同的操作。
 function planOutfits(view) {
   const state = view?.state;
   const now = view?.serverTime;
@@ -10,9 +10,10 @@ function planOutfits(view) {
   }
   const keys = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'];
   // 与游戏房间定义一致：岗位需要哪项基础属性就穿对应服装。
-  // 训练室按 trainStat；宿舍和门外属于休息位置，不主动分配服装。
+  // 训练速度只按基础属性计算，服装不影响训练，因此训练室不分配服装；
+  // 宿舍、门外和仓库也不产生属性收益。大门按耐力。
   const statByRoom = {
-    door: 'end', power: 'str', diner: 'agi', water: 'per', scrap: 'end', storage: 'end',
+    door: 'end', power: 'str', diner: 'agi', water: 'per', scrap: 'end',
     medbay: 'int', workshop: 'int', armory: 'str', tailor: 'cha', radio: 'cha'
   };
   const rooms = new Map(state.rooms.map(room => [room.id, room]));
@@ -20,55 +21,67 @@ function planOutfits(view) {
     keys.every(key => item.bonus[key] == null || Number.isFinite(item.bonus[key])));
   const wornBy = new Map();
   for (const resident of state.residents) if (resident.outfitId != null) wornBy.set(resident.outfitId, resident);
-  // 训练室按 trainStat 选装备；生产房间按岗位属性；宿舍、门外和外出居民没有目标属性。
+  // 训练室按游戏说明“服装不影响训练速度”，不占用服装；生产房间按岗位属性；
+  // 宿舍、门外和外出居民没有目标属性。
   function target(resident) {
     if (resident.deadAt !== null || resident.away !== null || resident.adultAt > now) return null;
     const room = rooms.get(resident.roomId);
     if (!room) return null;
-    if (room.type === 'training') return keys.includes(room.trainStat) ? room.trainStat : null;
     return statByRoom[room.type] ?? null;
   }
   const totalBonus = item => keys.reduce((sum, key) => sum + (Number(item.bonus[key]) || 0), 0);
   const value = (item, stat) => (Number(item.bonus[stat]) || 0) * 10 + totalBonus(item);
-  // 可重新分配的服装：仓库里的，或穿在家、未倒下居民身上且对本人当前岗位没有加成的。
-  // 在岗居民身上“穿错”的服装也可以转交：equip 会让原持有者自动卸下、当前居民换下的放回仓库，
-  // 这样调岗后留下的旧属性服装不会被锁死；对本人岗位有用的服装仍然不抢，避免拆掉正在生效的加成。
-  const available = items.filter(item => {
-    const owner = wornBy.get(item.id);
-    if (!owner) return true;
-    if (owner.away !== null || owner.deadAt !== null) return false;
-    const stat = target(owner);
-    return !stat || (Number(item.bonus[stat]) || 0) <= 0;
-  });
-  const candidates = [];
+  // 房间优先级只用于同分时排序：先看等级（每名工人的产出随等级提高），
+  // 同等级再看格数（大房间工人多，便于把高加成服装集中给主力房间）。
+  // 宿舍和仓库不产生属性收益，按 0 处理。
+  function priority(resident) {
+    const room = rooms.get(resident.roomId);
+    if (!room) return 0;
+    if (room.type === 'quarters' || room.type === 'storage') return 0;
+    const width = Math.max(1, Number(room.width) || 1);
+    const level = Math.max(1, Number(room.level) || 1);
+    return level * 100 + width;
+  }
+  // 外出或倒下居民身上的服装无法转交；其余服装都可以参与全局分配。
+  const lockedItems = new Set();
+  for (const [itemId, owner] of wornBy) {
+    if (owner.away !== null || owner.deadAt !== null) lockedItems.add(itemId);
+  }
+  const usable = items.filter(item => !lockedItems.has(item.id));
+  // 收集所有“居民 × 对该岗位有加成的服装”组合，按加成价值全局排序后依次分配。
+  // 这样混合属性服装会优先给更能发挥主属性的岗位，而不是被当前持有者锁住。
+  const pairs = [];
   for (const resident of state.residents) {
     const stat = target(resident);
     if (!stat) continue;
-    const current = resident.outfitId != null ? items.find(item => item.id === resident.outfitId) : null;
-    // 当前服装对岗位属性没有加成时不保护，直接视为可替换。
-    const currentValue = current && (Number(current.bonus[stat]) || 0) > 0 ? value(current, stat) : 0;
-    for (const item of available) {
-      const owner = wornBy.get(item.id);
-      if (owner?.id === resident.id) continue;
+    for (const item of usable) {
       const bonus = Number(item.bonus[stat]) || 0;
       if (bonus <= 0) continue;
-      const score = value(item, stat);
-      if (score <= currentValue) continue;
-      candidates.push({ resident, item, stat, bonus, score, gain: score - currentValue });
+      const owner = wornBy.get(item.id);
+      pairs.push({
+        resident, item, stat, bonus,
+        score: value(item, stat),
+        priority: priority(resident),
+        keep: owner?.id === resident.id ? 1 : 0
+      });
     }
   }
-  candidates.sort((left, right) => right.gain - left.gain || right.score - left.score ||
-    left.resident.id - right.resident.id || left.item.id - right.item.id);
-  const takenItems = new Set(), takenResidents = new Set(), changes = [];
-  for (const candidate of candidates) {
-    if (takenItems.has(candidate.item.id) || takenResidents.has(candidate.resident.id)) continue;
-    takenItems.add(candidate.item.id);
-    takenResidents.add(candidate.resident.id);
+  pairs.sort((left, right) => right.score - left.score || right.priority - left.priority ||
+    right.keep - left.keep || left.resident.id - right.resident.id || left.item.id - right.item.id);
+  const takenItems = new Set(), assigned = new Map();
+  for (const pair of pairs) {
+    if (takenItems.has(pair.item.id) || assigned.has(pair.resident.id)) continue;
+    takenItems.add(pair.item.id);
+    assigned.set(pair.resident.id, pair);
+  }
+  const changes = [];
+  for (const pair of assigned.values()) {
+    if (pair.resident.outfitId === pair.item.id) continue;
     changes.push({
-      residentId: candidate.resident.id, residentName: candidate.resident.name,
-      itemId: candidate.item.id, itemName: candidate.item.name,
-      stat: candidate.stat, bonus: candidate.bonus
+      residentId: pair.resident.id, residentName: pair.resident.name,
+      itemId: pair.item.id, itemName: pair.item.name,
+      stat: pair.stat, bonus: pair.bonus
     });
   }
-  return { changes, assigned: takenResidents.size };
+  return { changes, assigned: assigned.size };
 }
