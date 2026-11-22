@@ -30,11 +30,15 @@ function planOutfits(view) {
   }
   const totalBonus = item => keys.reduce((sum, key) => sum + (Number(item.bonus[key]) || 0), 0);
   const value = (item, stat) => (Number(item.bonus[stat]) || 0) * 10 + totalBonus(item);
-  // 可重新分配的服装：仓库里的，或穿在无岗位需求居民身上且本人在家未倒下的。
+  // 可重新分配的服装：仓库里的，或穿在家、未倒下居民身上且对本人当前岗位没有加成的。
+  // 在岗居民身上“穿错”的服装也可以转交：equip 会让原持有者自动卸下、当前居民换下的放回仓库，
+  // 这样调岗后留下的旧属性服装不会被锁死；对本人岗位有用的服装仍然不抢，避免拆掉正在生效的加成。
   const available = items.filter(item => {
     const owner = wornBy.get(item.id);
     if (!owner) return true;
-    return owner.away === null && owner.deadAt === null && !target(owner);
+    if (owner.away !== null || owner.deadAt !== null) return false;
+    const stat = target(owner);
+    return !stat || (Number(item.bonus[stat]) || 0) <= 0;
   });
   const candidates = [];
   for (const resident of state.residents) {
