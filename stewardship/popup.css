@@ -12,6 +12,8 @@ body { max-height: 420px; overflow-y: auto; padding: 14px; }
 .feature-options label { justify-content: flex-start; gap: 8px; margin: 8px 0; }
 .feature-options input[type="radio"] { accent-color: #8067bc; margin: 0; }
 .option-row { display: flex; align-items: center; gap: 8px; }
+/* 补充说明不占一行控件的高度，跟随在对应选项下方。 */
+.option-note { display: block; margin: -2px 0 8px 6px; color: #6b7280; font-size: 12px; }
 /* 指定属性与阈值放在同一行，按从左到右的顺序配置。 */
 .dismiss-stat-rule { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0; }
 #dismiss-stat { width: 64px; }
