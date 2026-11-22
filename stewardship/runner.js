@@ -1742,7 +1742,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
                 await handleWeeklyQuests();
                 if (stopped()) break;
               }
-              if (godEnabled) await rotateFinishedTrainees();
+              if (godEnabled) {
+                await rotateFinishedTrainees();
+                // 转站后岗位属性可能变化，立即按新岗位重选一次装备，不必等下一完整轮。
+                if (!stopped() && !task.incidentSnapshot && !view.state.rooms.some(room => room.incident)) await applyOutfits();
+              }
             }
           } catch (error) {
             if (error.fatal) throw error;
