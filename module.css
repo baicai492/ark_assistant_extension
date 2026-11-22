@@ -21,3 +21,9 @@ small, .note, .hint { display: block; color: #778296; font-size: 12px; }
 .help-button:hover { background: #e6def5; color: #604795; }
 .action-with-help { display: flex; flex: 1; align-items: center; gap: 4px; }
 .actions .help-button { margin: 0; padding: 0; }
+
+/* 自动升级顺序：逐项上移/下移，箭头按钮不占满整行。 */
+#upgrade-order { margin: 6px 0; padding-left: 22px; }
+#upgrade-order li { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+#upgrade-order .order-label { flex: 1; }
+#upgrade-order .order-button { flex: none; width: 28px; padding: 2px 0; border-radius: 6px; font-size: 13px; line-height: 1.4; background: #edf0f6; color: #53617a; }

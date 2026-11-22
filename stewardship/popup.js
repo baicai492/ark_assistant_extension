@@ -23,6 +23,10 @@ const birthEnabled = document.querySelector('#birth-enabled');
 const birthSection = document.querySelector('#birth-section');
 const questEnabled = document.querySelector('#quest-enabled');
 const questSection = document.querySelector('#quest-section');
+const upgradeEnabled = document.querySelector('#upgrade-enabled');
+const upgradeSection = document.querySelector('#upgrade-section');
+const upgradeDigEnabled = document.querySelector('#upgrade-dig-enabled');
+const upgradeOrderList = document.querySelector('#upgrade-order');
 const toggle = document.querySelector('#toggle');
 const status = document.querySelector('#status');
 const logs = document.querySelector('#logs');
@@ -34,6 +38,65 @@ let tabId, running = false, polling, godCycle;
 // 与托管脚本保持一致：面板只读取并显示最近一段日志。
 const logLimit = 2000;
 let logSignature = '';
+
+// 自动升级顺序：每项都是具体房间类型，运行时按这个顺序找下一间可升级的房间。
+const upgradeLabels = {
+  power: '发电站', scrap: '废料回收站', workshop: '零件工坊', diner: '餐厅', water: '净水站',
+  quarters: '宿舍', storage: '仓库', training: '训练室', armory: '武器工坊', tailor: '服装工坊', door: '大门',
+  medbay: '医务室', radio: '电台'
+};
+const defaultUpgradeOrder = Object.keys(upgradeLabels);
+let upgradeOrder = defaultUpgradeOrder.slice();
+let upgradeOrderSignature = '';
+function normalizeUpgradeOrder(order) {
+  const result = [];
+  for (const key of Array.isArray(order) ? order : []) {
+    if (Object.hasOwn(upgradeLabels, key) && !result.includes(key)) result.push(key);
+  }
+  for (const key of defaultUpgradeOrder) if (!result.includes(key)) result.push(key);
+  return result;
+}
+function renderUpgradeOrder(order = upgradeOrder) {
+  upgradeOrder = normalizeUpgradeOrder(order);
+  const signature = upgradeOrder.join(',');
+  if (signature === upgradeOrderSignature && upgradeOrderList.children.length) return;
+  upgradeOrderSignature = signature;
+  const fragment = document.createDocumentFragment();
+  upgradeOrder.forEach(key => {
+    const item = document.createElement('li');
+    item.dataset.key = key;
+    const label = document.createElement('span');
+    label.className = 'order-label';
+    label.textContent = upgradeLabels[key];
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'order-button';
+    up.textContent = '↑';
+    up.setAttribute('aria-label', `上移${upgradeLabels[key]}`);
+    up.addEventListener('click', () => moveUpgrade(key, -1));
+    const down = document.createElement('button');
+    down.type = 'button';
+    down.className = 'order-button';
+    down.textContent = '↓';
+    down.setAttribute('aria-label', `下移${upgradeLabels[key]}`);
+    down.addEventListener('click', () => moveUpgrade(key, 1));
+    item.append(label, up, down);
+    fragment.append(item);
+  });
+  upgradeOrderList.replaceChildren(fragment);
+  updateOptions();
+}
+function moveUpgrade(key, delta) {
+  if (running) return;
+  const from = upgradeOrder.indexOf(key);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= upgradeOrder.length) return;
+  upgradeOrder.splice(from, 1);
+  upgradeOrder.splice(to, 0, key);
+  upgradeOrderSignature = '';
+  renderUpgradeOrder();
+  chrome.storage.local.set({ shelterUpgradeOrder: upgradeOrder }).catch(() => {});
+}
 
 clearLogs.addEventListener('click', async () => {
   await chrome.storage.local.remove('shelterLogs');
@@ -93,13 +156,21 @@ function updateOptions() {
   dismissOptions.disabled = running || !dismissNewcomers.checked;
   dismissTotal.disabled = running || !dismissNewcomers.checked || !dismissEnabled.checked;
   dismissStatKey.disabled = dismissStat.disabled = running || !dismissNewcomers.checked || !dismissStatEnabled.checked;
+  upgradeDigEnabled.disabled = running || !upgradeEnabled.checked;
+  // 第一项不能上移、最后一项不能下移；运行中顺序已锁定。
+  [...upgradeOrderList.children].forEach((item, index) => {
+    const [up, down] = item.querySelectorAll('button');
+    if (up) up.disabled = running || !upgradeEnabled.checked || index === 0;
+    if (down) down.disabled = running || !upgradeEnabled.checked || index === upgradeOrderList.children.length - 1;
+  });
   if (!rescueEnabled.checked) rescueSection.open = false;
   if (!dismissNewcomers.checked) dismissSection.open = false;
   if (!godEnabled.checked) godSection.open = false;
   if (!birthEnabled.checked) birthSection.open = false;
   if (!questEnabled.checked) questSection.open = false;
+  if (!upgradeEnabled.checked) upgradeSection.open = false;
 }
-for (const [section, checkbox] of [[rescueSection, rescueEnabled], [dismissSection, dismissNewcomers], [godSection, godEnabled], [birthSection, birthEnabled], [questSection, questEnabled]]) {
+for (const [section, checkbox] of [[rescueSection, rescueEnabled], [dismissSection, dismissNewcomers], [godSection, godEnabled], [birthSection, birthEnabled], [questSection, questEnabled], [upgradeSection, upgradeEnabled]]) {
   section.querySelector('summary').addEventListener('click', event => {
     // 标题点击交给勾选框处理，由 change 事件统一联动展开与收起。
     if (event.target.tagName === 'SPAN' && !checkbox.disabled) {
@@ -116,7 +187,8 @@ godEnabled.addEventListener('change', () => {
     refreshGodParents().catch(showGodError);
   }
 });
-updateOptions();
+// 先渲染默认顺序；即使当前标签页不是避难所，设置区也有内容。
+renderUpgradeOrder();
 async function refreshGodParents() {
   godStatus.textContent = '正在读取造神亲本训练情况…';
   await chrome.scripting.executeScript({ target: { tabId }, files: ['workforce/planner.js', 'stewardship/god-plan.js'] });
@@ -124,7 +196,7 @@ async function refreshGodParents() {
     const response = await fetch('/api/shelter', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15000) });
     if (!response.ok || response.redirected) throw new Error('读取训练情况失败或登录已失效');
     const view = await response.json();
-    return { parents: planShelterGod(view).parents, paused: view.state.rooms.some(room => room.incident) || Boolean(globalThis.__fengbaoShelterAuto?.incidentSnapshot) };
+    return { parents: planShelterGod(view).parents, paused: view.state.rooms.some(room => room.incident) };
   } });
   if (!godEnabled.checked) return;
   const { parents, paused } = result.result;
@@ -163,13 +235,13 @@ async function refresh() {
   clearTimeout(polling);
   const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: () => {
     const task = globalThis.__fengbaoShelterAuto;
-    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, questEnabled: task.questEnabled, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
+    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, questEnabled: task.questEnabled, upgradeEnabled: task.upgradeEnabled, upgradeDigEnabled: task.upgradeDigEnabled, upgradeOrder: task.upgradeOrder, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
   } });
   const task = result.result;
   running = Boolean(task?.running);
   toggle.textContent = running ? task.stopRequested ? '正在关闭…' : '关闭' : '开启';
   toggle.disabled = Boolean(task?.stopRequested && running);
-  interval.disabled = recall.disabled = rescueEnabled.disabled = dismissNewcomers.disabled = godEnabled.disabled = birthEnabled.disabled = questEnabled.disabled = running;
+  interval.disabled = recall.disabled = rescueEnabled.disabled = dismissNewcomers.disabled = godEnabled.disabled = birthEnabled.disabled = questEnabled.disabled = upgradeEnabled.disabled = running;
   if (running) {
     interval.value = task.intervalSeconds; recall.value = task.recallEvents;
     rescueEnabled.checked = task.rescueEnabled; rescueAuto.checked = task.rescueMode === 'auto'; rescueWorkers.checked = task.rescueMode === 'workers'; rescueCount.value = task.rescueCount;
@@ -177,12 +249,18 @@ async function refresh() {
     if (dismissNewcomers.checked) { dismissEnabled.checked = task.dismissEnabled; dismissStatEnabled.checked = task.dismissStatEnabled; }
     dismissTotal.value = task.dismissTotal;
     if (task.dismissStatEnabled) { dismissStatKey.value = task.dismissStatKey; dismissStat.value = task.dismissStat; }
-    if (godEnabled.checked !== task.godEnabled) godSection.open = task.godEnabled;
+    // 面板重新打开时功能分组保持折叠，勾选状态从任务恢复即可；
+    // 只有用户手动点开时才展开，运行中的轮询不再自动展开。
     godEnabled.checked = task.godEnabled;
-    if (birthEnabled.checked !== task.birthEnabled) birthSection.open = task.birthEnabled;
     birthEnabled.checked = task.birthEnabled;
-    if (questEnabled.checked !== task.questEnabled) questSection.open = task.questEnabled;
     questEnabled.checked = task.questEnabled;
+    upgradeEnabled.checked = Boolean(task.upgradeEnabled);
+    upgradeDigEnabled.checked = Boolean(task.upgradeDigEnabled);
+    renderUpgradeOrder(task.upgradeOrder ?? defaultUpgradeOrder);
+  }
+  if (!running) {
+    // 关闭托管后功能分组统一收起，勾选状态保留，下次开启不用重新设置。
+    for (const section of [rescueSection, dismissSection, godSection, birthSection, questSection, upgradeSection]) section.open = false;
   }
   updateOptions();
   status.textContent = task?.message ?? '尚未开启托管。';
@@ -218,8 +296,9 @@ settings.addEventListener('submit', async event => {
       } });
       chrome.runtime.sendMessage({ type: 'fengbao-shelter-log-watch', tabId, running: false }).catch(() => {});
     } else {
-      await chrome.scripting.executeScript({ target: { tabId }, files: ['workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'] });
-      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked] });
+      chrome.storage.local.set({ shelterUpgradeOrder: upgradeOrder }).catch(() => {});
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['stewardship/upgrade-plan.js', 'workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'] });
+      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, upgrade, upgradeDig, upgradeOrderArg) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, upgrade, upgradeDig, upgradeOrderArg); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder] });
       chrome.runtime.sendMessage({ type: 'fengbao-shelter-log-watch', tabId, running: true }).catch(() => {});
     }
     await refresh();
@@ -229,6 +308,10 @@ settings.addEventListener('submit', async event => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab.url || !/^https:\/\/game\.arkengine\.me\/shelter\/?(?:[?#]|$)/.test(tab.url)) { status.textContent = '请在自己的避难所页面使用'; return; }
   tabId = tab.id;
+  renderUpgradeOrder();
+  // 面板不持久化其他设置；升级顺序单独保存，停止托管后仍保留用户调整。
+  const stored = await chrome.storage.local.get('shelterUpgradeOrder').catch(() => ({}));
+  if (!running) renderUpgradeOrder(stored.shelterUpgradeOrder ?? defaultUpgradeOrder);
   await refresh();
   await checkLogHost();
 })().catch(showError);
