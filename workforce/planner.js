@@ -95,7 +95,9 @@ function planWorkforce(view) {
     return { worker, highest, stats: keys.filter(key => worker.stats[key] === highest) };
   });
   const order = (left, right) => right.highest - left.highest || left.worker.id - right.worker.id;
-  const slots = rooms.filter(room => room.type !== 'training').flatMap(room =>
+  // 电台和医务室不参与一键安排：电台没有资源产出，医务室有治疗针产出，
+  // 自动把人排进这两类房间会把居民留在非生产岗上，交给玩家手动安排。
+  const slots = rooms.filter(room => room.type !== 'training' && !['radio', 'medbay'].includes(room.type)).flatMap(room =>
     Array.from({ length: room.width * 2 }, () => ({ room, worker: null })));
   // 先放唯一最高者，再让并列最高者补位或替换属性更低的人；智力岗位工坊优先。
   for (const candidate of [...candidates.filter(item => item.stats.length === 1).sort(order),

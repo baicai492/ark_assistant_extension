@@ -46,16 +46,19 @@ function planShelterGod(view, excludedIds = new Set(), onlyFinishedTraining = fa
     }
     return null;
   }
-  // 练满 70 后的岗位：先补电力、食物、净水缺口，三项都为正收益时优先废料、再零件（保证废料不为负）、治疗针，最后电台。
+  // 练满 70 后的岗位：先补电力、食物、净水缺口，三项都为正收益时优先废料、再零件（保证废料不为负）。
+  // 电台和医务室不参与自动岗位分配，交玩家手动安排。
   function chooseJob(resident) {
     const free = room => room.width * 2 - occupants(room);
-    const candidates = rooms.filter(room => names[room.type] && room.type !== 'training' && room.builtAt <= now &&
+    const candidates = rooms.filter(room => names[room.type] && room.type !== 'training' &&
+      !['radio', 'medbay'].includes(room.type) && room.builtAt <= now &&
       room.upgradeAt === null && !room.incident && !room.unpowered && free(room) > 0);
     if (model) {
       const net = model.net(assignments);
       const deficits = ['power', 'food', 'water'].filter(key => net[key] < 0).sort((left, right) => net[left] - net[right]);
-      // 缺口补齐后优先零件工坊，再废料回收站、医务室，最后电台；零件不能把废料吃成负数。
-      const order = [...deficits, 'parts', 'scrap', 'stimpak'];
+      // 缺口补齐后优先零件工坊，再废料回收站；零件不能把废料吃成负数。
+      // 电台和医务室无人时由玩家手动安排，不自动补人。
+      const order = [...deficits, 'parts', 'scrap'];
       for (const resource of order) {
         const options = candidates.filter(room => model.types[room.type]?.resource === resource)
           .map(room => ({ room, net: model.net([...assignments, { residentId: resident.id, roomId: room.id }]) }))
@@ -64,18 +67,16 @@ function planShelterGod(view, excludedIds = new Set(), onlyFinishedTraining = fa
             left.room.floor - right.room.floor || left.room.id - right.room.id);
         if (options.length) return options[0].room;
       }
-      // 没有缺口且零件工坊、废料回收站、医务室、电台都满员时，把空闲居民补进电力、
+      // 没有缺口且零件工坊、废料回收站都满员时，把空闲居民补进电力、
       // 食物、净水等还有空位的生产房间，避免有人闲置而资源库存长期不满。
-      const spare = candidates.filter(room => room.type !== 'radio')
+      const spare = candidates
         .sort((left, right) => right.level - left.level || right.width - left.width ||
           left.floor - right.floor || left.id - right.id);
-      if (spare.length) return spare[0];
-      return candidates.filter(room => room.type === 'radio')
-        .sort((left, right) => right.level - left.level || left.floor - right.floor || left.id - right.id)[0] ?? null;
+      return spare[0] ?? null;
     }
     // 未注入产出模型时按最高属性对应岗位兜底。
     const highest = keys.filter(key => resident.stats[key] === Math.max(...keys.map(item => resident.stats[item])));
-    const types = highest.flatMap(key => production[key]);
+    const types = highest.flatMap(key => production[key]).filter(type => !['radio', 'medbay'].includes(type));
     return candidates.filter(room => types.includes(room.type))
       .sort((left, right) => right.level - left.level || left.floor - right.floor || left.id - right.id)[0] ?? null;
   }

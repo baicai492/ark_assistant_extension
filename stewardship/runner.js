@@ -516,13 +516,15 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     }
   }
   // 生产岗位：先补电力、食物、净水缺口，正收益时优先零件工坊（不能把废料吃成负数），
-  // 再废料回收站、医务室，最后电台。
+  // 再废料回收站。电台和医务室不参与自动岗位分配：电台没有资源产出，医务室有治疗针产出，
+  // 自动把人拉进这两类房间会把居民留在非生产岗上，交给玩家手动安排。
   function chooseProductionRoom(resident) {
     const model = workforceModel(view);
     // 与游戏调动校验一致：房间内未倒下的成人占位（外出居民的岗位也保留）。
     const occupied = roomId => view.state.residents.filter(item => item.roomId === roomId && item.deadAt === null &&
       item.adultAt <= view.serverTime).length;
-    const rooms = model.rooms.filter(room => room.type !== 'training' && occupied(room.id) < room.width * 2);
+    const rooms = model.rooms.filter(room => room.type !== 'training' && occupied(room.id) < room.width * 2 &&
+      !['radio', 'medbay'].includes(room.type));
     const net = model.net();
     const deficits = ['power', 'food', 'water'].filter(key => net[key] < 0).sort((left, right) => net[left] - net[right]);
     const order = [...deficits, 'parts', 'scrap', 'stimpak'];
@@ -534,14 +536,14 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           left.room.floor - right.room.floor || left.room.id - right.room.id);
       if (options.length) return options[0].room;
     }
-    // 没有缺口且零件工坊、废料回收站、医务室、电台都满员时，把空闲居民补进电力、
-    // 食物、净水等还有空位的生产房间，避免资源库存长期不满却有人留在门外。
+    // 没有缺口且零件工坊、废料回收站都满员时，把空闲居民补进电力、
+    // 食物、净水等还有空位的生产房间，避免有人闲置而资源库存长期不满。
+    // 电台和医务室不参与自动岗位分配：电台没有资源产出，医务室有治疗针产出，
+    // 自动把人拉进这两类房间会把居民留在非生产岗上，交给玩家手动安排。
     const spare = rooms.filter(room => room.type !== 'radio')
       .sort((left, right) => right.level - left.level || right.width - left.width ||
         left.floor - right.floor || left.id - right.id);
-    if (spare.length) return spare[0];
-    return rooms.filter(room => room.type === 'radio')
-      .sort((left, right) => right.level - left.level || left.floor - right.floor || left.id - right.id)[0] ?? null;
+    return spare[0] ?? null;
   }
   // 资源补缺：电力、食物、净水为负时，从废料回收站、零件工坊等非缺口岗位调人补进空位。
   async function balanceResources() {
@@ -1104,6 +1106,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   // 本周废土任务：小队到家后领取。完成的任务不再重试，队员回到训练、生育、工作等正常调度；
   // 失败的任务记录原班人马，随后按同样的队伍重新派出。任务领取前，小队成员在其他调度中全部排除。
   // 自动周常开启时，还会把休息区（门外）闲置居民按等级从高到低每 3 人编成一队，
+  // 休息区不足 3 人时从废料回收站的居民补（只补凑不满的队伍，不拆守门、在岗等受保护居民），
   // 出发前换上对任务战力提升最大的武器和服装，派往尚未完成的本周任务；游戏最多同时 2 支小队。
   // 进行中的小队不提前召回，事件处理中暂停新的派出。
   function residentLevel(resident) {
@@ -1143,6 +1146,18 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       // 感情满的配对待产或等待人口空位，不派去长时间任务，避免打断生育流程。
       !(resident.romance && resident.romance.progress >= 1)
     ).sort((left, right) => residentLevel(right) - residentLevel(left) ||
+      questPower(right) - questPower(left) || left.id - right.id);
+  }
+  // 休息区凑不满 3 人时，从废料回收站补人：只取在家、成年、血量达标且不受保护的居民。
+  // 守门、配对、待产、刚被搬动或被临时保护的居民不动，避免为了派任务打断其他流程。
+  function questScrapResidents() {
+    const questTeams = questTeamIds();
+    return view.state.residents.filter(resident => {
+      if (resident.roomId == null || !questReady(resident)) return false;
+      if (view.state.rooms.find(room => room.id === resident.roomId)?.type !== 'scrap') return false;
+      return !task.pendingDispatch[resident.id] && !protectedResident(resident) &&
+        !questTeams.has(resident.id) && !(resident.romance && resident.romance.progress >= 1);
+    }).sort((left, right) => residentLevel(right) - residentLevel(left) ||
       questPower(right) - questPower(left) || left.id - right.id);
   }
   function weaponDamage(item) {
@@ -1310,7 +1325,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         if (!resident || activeTeams.has(resident.id) || !questReady(resident)) continue;
         if (!members.some(item => item.id === resident.id)) members.push(resident);
       }
-      for (const resident of [...idlePool]) {
+      for (const resident of [...idlePool, ...questScrapResidents()]) {
         // 未开启自动周常时不主动补新人，仍只用原班人马重试。
         if (!task.questEnabled || members.length >= 3) break;
         if (claimed.has(resident.id) || members.some(item => item.id === resident.id)) continue;
@@ -1348,13 +1363,18 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       .sort((left, right) => (Number(right.recommendedLevel) || 0) - (Number(left.recommendedLevel) || 0) ||
         (Number(right.difficulty) || 0) - (Number(left.difficulty) || 0) ||
         String(left.id).localeCompare(String(right.id)));
-    // 休息区闲置居民按等级从高到低编组，同等级按战力，每组 3 人；游戏最多同时 2 支小队，
-    // 重试已经占用名额时这里相应少派。
+    // 休息区闲置居民按等级从高到低编组，同等级按战力，每组 3 人；休息区不足 3 人时
+    // 从废料回收站补（只补凑不满的队伍，不拆散已经在休息区编好的高等级居民）。
+    // 游戏最多同时 2 支小队，重试已经占用名额时这里相应少派。
     let pendingIndex = 0;
-    while (pendingIndex < pending.length && idlePool.length >= 3) {
+    while (pendingIndex < pending.length && idlePool.length + questScrapResidents().length >= 3) {
       if (stopped()) return;
       if (runningCount() >= 2) break;
-      const team = idlePool.splice(0, 3);
+      const team = idlePool.splice(0, Math.min(3, idlePool.length));
+      for (const resident of questScrapResidents()) {
+        if (team.length >= 3) break;
+        team.push(resident);
+      }
       if (team.length < 3) break;
       const quest = pending[pendingIndex++];
       if (!await dispatchQuest(quest, team)) {
@@ -1363,7 +1383,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       }
       active.add(quest.id);
     }
-    if (pendingIndex < pending.length && idlePool.length >= 3 && runningCount() >= 2 &&
+    if (pendingIndex < pending.length && idlePool.length + questScrapResidents().length >= 3 && runningCount() >= 2 &&
         !task.questLogAt.__questCap__) {
       task.questLogAt.__questCap__ = now;
       log('本周任务：已有 2 支小队在任务中，等有队伍回来再派新队。');
