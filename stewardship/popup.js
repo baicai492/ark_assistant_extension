@@ -243,6 +243,8 @@ async function refresh() {
   running = Boolean(task?.running);
   toggle.textContent = running ? task.stopRequested ? '正在关闭…' : '关闭' : '开启';
   toggle.disabled = Boolean(task?.stopRequested && running);
+  // 关闭时必须绕过表单校验：功能设置里有必填项时，无效值会阻止 submit，导致“关闭”点了没反应。
+  toggle.formNoValidate = running;
   interval.disabled = recall.disabled = rescueEnabled.disabled = dismissNewcomers.disabled = godEnabled.disabled = birthEnabled.disabled = questEnabled.disabled = upgradeEnabled.disabled = running;
   if (running) {
     interval.value = task.intervalSeconds; recall.value = task.recallEvents;
@@ -266,8 +268,11 @@ async function refresh() {
     for (const section of [rescueSection, dismissSection, godSection, birthSection, questSection, upgradeSection]) section.open = false;
   }
   updateOptions();
-  status.textContent = task?.message ?? '尚未开启托管。';
-  if (running && task.nextAt && !task.stopRequested) status.textContent += ` 下次检查倒计时：${Math.max(0, Math.ceil((task.nextAt - Date.now()) / 1000))} 秒。`;
+  if (running && task?.stopRequested) status.textContent = '正在关闭托管…';
+  else {
+    status.textContent = task?.message ?? '尚未开启托管。';
+    if (running && task.nextAt) status.textContent += ` 下次检查倒计时：${Math.max(0, Math.ceil((task.nextAt - Date.now()) / 1000))} 秒。`;
+  }
   const { shelterLogs = [], shelterLogStatus } = await chrome.storage.local.get(['shelterLogs', 'shelterLogStatus']);
   const source = shelterLogs.length ? shelterLogs.slice(-logLimit) : task?.logs ?? [];
   // 日志没变化时不再拼接和重写整个 textarea；否则面板每秒都要处理几十万字符。
@@ -291,6 +296,9 @@ settings.addEventListener('submit', async event => {
   toggle.disabled = true;
   try {
     if (running) {
+      // 先给出反馈，避免关闭请求等待后台退出时看起来没反应。
+      toggle.textContent = '正在关闭…';
+      status.textContent = '正在关闭托管…';
       await chrome.scripting.executeScript({ target: { tabId }, func: () => {
         const task = globalThis.__fengbaoShelterAuto;
         task.stopRequested = true;
@@ -305,7 +313,7 @@ settings.addEventListener('submit', async event => {
       chrome.runtime.sendMessage({ type: 'fengbao-shelter-log-watch', tabId, running: true }).catch(() => {});
     }
     await refresh();
-  } catch (error) { showError(error); toggle.disabled = false; }
+  } catch (error) { showError(error); toggle.disabled = false; toggle.textContent = running ? '关闭' : '开启'; }
 });
 (async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
