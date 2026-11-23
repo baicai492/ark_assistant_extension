@@ -6,6 +6,7 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
+  <div class="top">
   <header><span class="brand">风</span><div><h1>风堇Ark自动助手</h1><p>把重复的小事，交给风宝</p></div><select id="mode" aria-label="模式选择"><option value="cultivation">主站修仙</option><option value="shelter">避难所</option></select></header>
   <nav data-mode="cultivation" aria-label="主站修仙功能选择">
     <button data-module="encounter" aria-pressed="true">奇遇循环</button>
@@ -19,6 +20,7 @@
     <button data-module="residents" aria-pressed="false">居民信息</button>
     <button data-module="pairing" aria-pressed="false">居民配对</button>
   </nav>
+  </div>
   <iframe id="panel" title="奇遇循环"></iframe>
   <footer>切换功能或关闭面板不会停止已启动的任务</footer>
   <script src="popup.js"></script>
