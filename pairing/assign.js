@@ -8,6 +8,7 @@ function startDormAssignment(pairs) {
   (async () => {
     let view;
     const skipping = globalThis.__fengbaoDormPairSkip(checkPair, () => view.state.residents);
+    const residentState = globalThis.__fengbaoDormResidentState(() => view);
     const keys = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'];
     // 游戏规则：6 人宿舍可同时安排两组生育，1 格宿舍只能一组。
     const MAX_PAIRS_PER_ROOM = 2;
@@ -37,7 +38,7 @@ function startDormAssignment(pairs) {
           throw new Error(`居民「${resident.name ?? resident.id}」的数据不完整`);
         }
         if (resident.adultAt > view.serverTime || resident.away !== null || resident.deadAt !== null ||
-            (resident.romance && view.state.rooms.some(room => room.id === resident.roomId && room.type === 'quarters')) ||
+            residentState.hasDormRomance(resident) ||
             resident.familyCooldownUntil > view.serverTime) {
           throw skipping.unavailable(`「${resident.name}」当前无法调动配对，请重新计算或等待其状态恢复`);
         }
@@ -53,7 +54,7 @@ function startDormAssignment(pairs) {
     async function moveResident(residentId, roomId) {
       const resident = view.state.residents.find(item => item.id === residentId);
       // 保护宿舍内的感情关系，已离开宿舍的居民允许重新配对。
-      if (!resident || (resident.romance && view.state.rooms.some(room => room.id === resident.roomId && room.type === 'quarters'))) throw new Error('居民状态已变化，停止后续调动');
+      if (!resident || residentState.hasDormRomance(resident)) throw new Error('居民状态已变化，停止后续调动');
       task.message = roomId === null ? `正在将「${resident.name}」移到门外休息…` : `正在安排「${resident.name}」入住宿舍…`;
       const response = await fetch('/api/shelter/action', {
         method: 'POST', credentials: 'same-origin', signal: AbortSignal.timeout(15000),
@@ -96,7 +97,7 @@ function startDormAssignment(pairs) {
       const pendingParents = new Set(view.state.births.flatMap(birth => birth.parents));
       function protectedAdults(roomId) {
         const list = occupants(roomId);
-        return list.filter(resident => hasPartner(resident, list) || pendingParents.has(resident.id)).length;
+        return list.filter(resident => residentState.isProtectedAdult(resident, pendingParents)).length;
       }
       // 一个 6 人宿舍最多同时放两组；已有感情或待产的宿舍按剩余组数安排，成人容量另算。
       const plan = [];
@@ -115,7 +116,7 @@ function startDormAssignment(pairs) {
       // 只移走本批要使用的宿舍里的未配对成人；已有伴侣和待产父母原地保留。
       for (const room of [...new Set(activePlan.map(item => item.room.id))].map(id => view.state.rooms.find(item => item.id === id))) {
         for (const resident of occupants(room.id)) {
-          if (hasPartner(resident, occupants(room.id)) || pendingParents.has(resident.id)) continue;
+          if (residentState.isProtectedAdult(resident, pendingParents)) continue;
           await moveResident(resident.id, null);
         }
       }
