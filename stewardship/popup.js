@@ -296,6 +296,7 @@ settings.addEventListener('submit', async event => {
       } });
       chrome.runtime.sendMessage({ type: 'fengbao-shelter-log-watch', tabId, running: false }).catch(() => {});
     } else {
+      await savedSettings.save();
       chrome.storage.local.set({ shelterUpgradeOrder: upgradeOrder }).catch(() => {});
       await chrome.scripting.executeScript({ target: { tabId }, files: ['stewardship/upgrade-plan.js', 'workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'] });
       await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, upgrade, upgradeDig, upgradeOrderArg) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, upgrade, upgradeDig, upgradeOrderArg); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder] });
@@ -305,13 +306,12 @@ settings.addEventListener('submit', async event => {
   } catch (error) { showError(error); toggle.disabled = false; }
 });
 (async () => {
+  await savedSettings.ready;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab.url || !/^https:\/\/game\.arkengine\.me\/shelter\/?(?:[?#]|$)/.test(tab.url)) { status.textContent = '请在自己的避难所页面使用'; return; }
   tabId = tab.id;
-  renderUpgradeOrder();
-  // 面板不持久化其他设置；升级顺序单独保存，停止托管后仍保留用户调整。
   const stored = await chrome.storage.local.get('shelterUpgradeOrder').catch(() => ({}));
-  if (!running) renderUpgradeOrder(stored.shelterUpgradeOrder ?? defaultUpgradeOrder);
-  await refresh();
+  renderUpgradeOrder(stored.shelterUpgradeOrder ?? defaultUpgradeOrder);
+  await initializeStewardshipSettings();
   await checkLogHost();
 })().catch(showError);
