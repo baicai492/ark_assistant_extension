@@ -26,6 +26,7 @@ const questSection = document.querySelector('#quest-section');
 const upgradeEnabled = document.querySelector('#upgrade-enabled');
 const upgradeSection = document.querySelector('#upgrade-section');
 const upgradeDigEnabled = document.querySelector('#upgrade-dig-enabled');
+const upgradeCraftEnabled = document.querySelector('#upgrade-craft-enabled');
 const upgradeOrderList = document.querySelector('#upgrade-order');
 const toggle = document.querySelector('#toggle');
 const status = document.querySelector('#status');
@@ -157,6 +158,7 @@ function updateOptions() {
   dismissTotal.disabled = running || !dismissNewcomers.checked || !dismissEnabled.checked;
   dismissStatKey.disabled = dismissStat.disabled = running || !dismissNewcomers.checked || !dismissStatEnabled.checked;
   upgradeDigEnabled.disabled = running || !upgradeEnabled.checked;
+  upgradeCraftEnabled.disabled = running || !upgradeEnabled.checked;
   // 第一项不能上移、最后一项不能下移；运行中顺序已锁定。
   [...upgradeOrderList.children].forEach((item, index) => {
     const [up, down] = item.querySelectorAll('button');
@@ -235,7 +237,7 @@ async function refresh() {
   clearTimeout(polling);
   const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: () => {
     const task = globalThis.__fengbaoShelterAuto;
-    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, questEnabled: task.questEnabled, upgradeEnabled: task.upgradeEnabled, upgradeDigEnabled: task.upgradeDigEnabled, upgradeOrder: task.upgradeOrder, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
+    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, questEnabled: task.questEnabled, upgradeEnabled: task.upgradeEnabled, upgradeDigEnabled: task.upgradeDigEnabled, craftOutfitsEnabled: task.craftOutfitsEnabled, upgradeOrder: task.upgradeOrder, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
   } });
   const task = result.result;
   running = Boolean(task?.running);
@@ -256,6 +258,7 @@ async function refresh() {
     questEnabled.checked = task.questEnabled;
     upgradeEnabled.checked = Boolean(task.upgradeEnabled);
     upgradeDigEnabled.checked = Boolean(task.upgradeDigEnabled);
+    upgradeCraftEnabled.checked = Boolean(task.craftOutfitsEnabled);
     renderUpgradeOrder(task.upgradeOrder ?? defaultUpgradeOrder);
   }
   if (!running) {
@@ -298,7 +301,7 @@ settings.addEventListener('submit', async event => {
     } else {
       chrome.storage.local.set({ shelterUpgradeOrder: upgradeOrder }).catch(() => {});
       await chrome.scripting.executeScript({ target: { tabId }, files: ['stewardship/upgrade-plan.js', 'workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'] });
-      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, upgrade, upgradeDig, upgradeOrderArg) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, upgrade, upgradeDig, upgradeOrderArg); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder] });
+      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, upgrade, upgradeDig, upgradeOrderArg, craftOutfits) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, upgrade, upgradeDig, upgradeOrderArg, craftOutfits); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder, upgradeEnabled.checked && upgradeCraftEnabled.checked] });
       chrome.runtime.sendMessage({ type: 'fengbao-shelter-log-watch', tabId, running: true }).catch(() => {});
     }
     await refresh();
