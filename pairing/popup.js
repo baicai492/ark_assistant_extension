@@ -149,7 +149,7 @@ assignDorms.addEventListener('click', async () => {
       setBusy(false);
       return;
     }
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['pairing/skip-unavailable.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['pairing/resident-state.js', 'pairing/skip-unavailable.js'] });
     await chrome.scripting.executeScript({ target: { tabId }, func: startDormAssignment, args: [recommendedPairs] });
     // 本批结果执行后失效，必须重新计算才能再发起安排。
     recommendedPairs = [];
