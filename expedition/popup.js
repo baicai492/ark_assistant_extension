@@ -30,13 +30,14 @@ async function send(action) {
 }
 
 start.addEventListener('click', async () => {
-  try { show(await send('start')); } catch (error) { showError(error); }
+  try { await savedSettings.save(); show(await send('start')); } catch (error) { showError(error); }
 });
 stop.addEventListener('click', async () => {
   try { show(await send('stop')); } catch (error) { showError(error); }
 });
 
 async function initialize() {
+  await savedSettings.ready;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab.url || !/^https:\/\/game\.arkengine\.me\/activities\/expedition\/?(?:[?#]|$)/.test(tab.url)) {
     status.textContent = '请在 “远征” 页面打开此扩展';
@@ -46,8 +47,8 @@ async function initialize() {
   // 仅注入当前远征页面，重复打开面板不会重复创建任务。
   await chrome.scripting.executeScript({ target: { tabId }, files: ['expedition/content.js'] });
   const state = await send('status');
-  burst.checked = state.burst;
   show(state);
+  if (state.running) await savedSettings.save();
   poll = setInterval(async () => {
     if (Date.now() < nextPoll) return;
     try { show(await send('status')); } catch (error) {
