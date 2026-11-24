@@ -219,7 +219,11 @@ async function refreshGodParents() {
     next.textContent = `下一步：${parent.nextRoom}`;
     const room = document.createElement('small');
     room.textContent = parent.room;
-    item.append(name, current, progress, next, room);
+    // 当前所在房间与居民名称同行显示。
+    const heading = document.createElement('div');
+    heading.className = 'god-parent-heading';
+    heading.append(name, room);
+    item.append(heading, current, progress, next);
     godParents.append(item);
   }
 }
