@@ -67,7 +67,10 @@
         if (resident.name.includes('★')) return { id: resident.id, oldName: resident.name, name: resident.name, level: resident.level };
         // 并列最高的基础属性全部保留，按力、感、耐、魅、智、敏、幸顺序拼接。
         const highest = Math.max(...attributes.map(([key]) => resident.stats[key]));
-        const label = attributes.filter(([key]) => resident.stats[key] === highest).map(([, label]) => label).join('');
+        // 至少五项基础属性为 10 时，统一使用“神”作为名称前缀；否则并列最高属性全部保留。
+        const label = attributes.filter(([key]) => resident.stats[key] === 10).length >= 5
+          ? '神'
+          : attributes.filter(([key]) => resident.stats[key] === highest).map(([, label]) => label).join('');
         const number = numbers.get(resident.id) ?? String(nextNumber++);
         // A–D 每次重新分配，其他大写后缀保留，新亲本标记放在名字末尾。
         const suffix = (resident.name.match(/\d(?:\([\d,]+\))?([A-Z]+)$/)?.[1] ?? '').replace(/[ABCD]/g, '');
