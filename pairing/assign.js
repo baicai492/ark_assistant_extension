@@ -120,6 +120,8 @@ function startDormAssignment(pairs) {
           await moveResident(resident.id, null);
         }
       }
+      // 跳过组不占实际组号；按已完成的组数重新编号。
+      const groupsByRoom = new Map();
       await skipping.run(activePlan, async ({ ids, room }, members) => {
         const currentRoom = view.state.rooms.find(item => item.id === room.id);
         if (!currentRoom || currentRoom.type !== 'quarters' || currentRoom.incident || currentRoom.upgradeAt !== null ||
@@ -133,10 +135,11 @@ function startDormAssignment(pairs) {
         if (!ids.every(id => actual.some(resident => resident.id === id))) {
           throw new Error(`${room.floor} 层宿舍入住结果不符，请检查游戏页面`);
         }
-        const group = plan.filter(item => item.room.id === room.id).findIndex(item => item.ids === ids) + 1;
+        const group = (groupsByRoom.get(room.id) ?? 0) + 1;
+        groupsByRoom.set(room.id, group);
         task.completed.push(`${members.map(resident => resident.name).join(' ＋ ')} → ${room.floor} 层 ${room.level} 级宿舍（房间 ${room.id}）第 ${group} 组`);
       });
-      const remaining = pairs.length - plan.length;
+      const remaining = pairs.length - task.completed.length;
       task.message = `已安排 ${task.completed.length} 对；6 人宿舍最多同时两组，已有感情或待产的宿舍按剩余组数安排。${remaining ? `\n可用组数不足，剩余 ${remaining} 对未安排。` : ''}\n儿童保留原处，未配对成人已移到门外。游戏画面如未更新，请刷新查看。${skipping.summary()}`;
     } catch (error) {
       // 保留已完成的真实结果，失败后不继续，也不自动重试未知结果的请求。
