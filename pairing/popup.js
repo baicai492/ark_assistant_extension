@@ -123,6 +123,7 @@ async function calculateResidents(requestedGroups) {
   excludedList.replaceChildren();
   status.textContent = '正在读取全部居民并计算…';
   try {
+    await savedSettings.save();
     // 脚本在当前游戏页读取同源数据；每次点击都重新读取，不缓存过期推荐。
     const [injection] = await chrome.scripting.executeScript({ target: { tabId }, files: ['pairing/content.js'] });
     if (injection.result.error) throw new Error(injection.result.error);
@@ -148,6 +149,7 @@ assignDorms.addEventListener('click', async () => {
       setBusy(false);
       return;
     }
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['pairing/resident-state.js', 'pairing/skip-unavailable.js'] });
     await chrome.scripting.executeScript({ target: { tabId }, func: startDormAssignment, args: [recommendedPairs] });
     // 本批结果执行后失效，必须重新计算才能再发起安排。
     recommendedPairs = [];
@@ -158,6 +160,7 @@ assignDorms.addEventListener('click', async () => {
 });
 
 async function initialize() {
+  await savedSettings.ready;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab.url || !/^https:\/\/game\.arkengine\.me\/shelter\/?(?:[?#]|$)/.test(tab.url)) {
     status.textContent = '请在 “避难所” 页面打开此功能';
