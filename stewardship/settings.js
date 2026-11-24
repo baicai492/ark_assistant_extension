@@ -4,7 +4,7 @@ const savedSettings = bindPersistentSettings('stewardship', [
   'dismiss-newcomers-enabled', 'dismiss-enabled', 'dismiss-total',
   'dismiss-stat-enabled', 'dismiss-stat-key', 'dismiss-stat',
   'god-enabled', 'birth-enabled', 'quest-enabled',
-  'upgrade-enabled', 'upgrade-dig-enabled'
+  'upgrade-enabled', 'upgrade-dig-enabled', 'upgrade-craft-enabled'
 ]);
 
 async function initializeStewardshipSettings() {
