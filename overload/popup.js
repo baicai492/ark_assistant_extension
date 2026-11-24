@@ -24,13 +24,14 @@ async function send(action) {
 }
 
 start.addEventListener('click', async () => {
-  try { show(await send('start')); } catch (error) { showError(error); }
+  try { await savedSettings.save(); show(await send('start')); } catch (error) { showError(error); }
 });
 stop.addEventListener('click', async () => {
   try { show(await send('stop')); } catch (error) { showError(error); }
 });
 
 async function initialize() {
+  await savedSettings.ready;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab.url?.startsWith('https://game.arkengine.me/')) {
     status.textContent = '请在 “作战” 页面打开此扩展';
@@ -39,7 +40,9 @@ async function initialize() {
   tabId = tab.id;
   // 兼容安装前已打开的页面，脚本本身会防止重复初始化。
   await chrome.scripting.executeScript({ target: { tabId }, files: ['overload/content.js'] });
-  show(await send('status'));
+  const state = await send('status');
+  show(state);
+  if (state.running) await savedSettings.save();
   poll = setInterval(async () => {
     try { show(await send('status')); } catch (error) { showError(error); }
   }, 500);
