@@ -11,3 +11,20 @@ button[aria-pressed="true"] { background: #604795; }
 .resident-total { flex-shrink: 0; color: #6c55af; }
 .stats { margin-top: 4px; color: #66738a; font-size: 12px; }
 progress { display: block; width: 100%; height: 10px; margin: 8px 0; accent-color: #8067bc; }
+#residents[hidden], #distribution[hidden] { display: none; }
+#distribution select { max-width: 65%; min-width: 0; padding: 5px; border: 1px solid #ddd7f0; border-radius: 6px; background: white; color: #283750; font: inherit; }
+#distribution select:focus-visible { outline: 2px solid #8873c5; outline-offset: 2px; }
+#distribution-summary { padding: 8px; border-radius: 8px; background: #f2effa; }
+#distribution-low-count { color: #875416; }
+.distribution-chart { display: grid; gap: 5px; margin: 8px 0 16px; }
+.distribution-row { display: grid; grid-template-columns: 42px minmax(30px, 1fr) 100px; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.distribution-bar { height: 8px; overflow: hidden; background: #eeeaf6; border-radius: 4px; }
+.distribution-fill { display: block; height: 100%; background: #8873c5; border-radius: inherit; }
+.distribution-count { text-align: right; font-size: 12px; }
+.distribution-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.distribution-table caption { text-align: left; font-weight: bold; padding-bottom: 6px; }
+.distribution-table th, .distribution-table td { padding: 4px 2px; text-align: right; border-bottom: 1px solid #e5e0f0; }
+.distribution-table th:first-child { text-align: left; }
+#distribution details > summary { cursor: pointer; color: #6c55af; }
+#distribution-low-list { padding-left: 22px; }
+#distribution-low-list li { margin: 8px 0; overflow-wrap: anywhere; }
