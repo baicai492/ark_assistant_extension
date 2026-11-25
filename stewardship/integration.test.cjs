@@ -20,6 +20,11 @@ const view = (residents = [], rooms = [], extra = {}) => ({ serverTime: now, env
   state: { residents, rooms, items: [], births: [], quests: [], weekly: { week: 'w1', completed: [] },
     explorers: [], resources: { stimpak: 100 }, legacy: { perks: {} }, ...extra } });
 const plain = value => JSON.parse(JSON.stringify(value));
+const populationOptions = { enabled: true, total: 60, minIdle: 5 };
+const populationFixture = () => view([
+  ...Array.from({ length: 10 }, (_, index) => person(index + 1, { parents: [101, 102], stats: stats(9) })),
+  person(101, { roomId: 2, stats: stats(10) }), person(102, { roomId: 2, stats: stats(10) })
+], [room(1, 'quarters', { width: 3 }), room(2, 'radio')]);
 function load(globals = {}) {
   const context = vm.createContext({ AbortSignal, crypto: { randomUUID }, Date,
     location: { origin: 'https://game.arkengine.me', pathname: '/shelter' }, ...globals });
@@ -70,11 +75,11 @@ async function run(initial, options = {}, hooks = {}) {
     await hooks.after?.({ server, action, actions, gets, context });
     return { ok: true, status: 200, redirected: false, json: async () => structuredClone(action ? { view: server } : server) };
   };
-  context.startShelterAuto(600, 6, options.dismiss ?? false, options.total ?? 20,
+  context.startShelterAuto(options.interval ?? 600, 6, options.dismiss ?? false, options.total ?? 20,
     options.dismissStat ?? false, options.statKey ?? 'end', options.stat ?? 4, options.rescues ?? 1,
     options.rescue ?? false, options.mode ?? 'auto', options.god ?? false, options.birth ?? false, options.quest ?? false,
     options.training ?? {}, options.upgrade ?? false, options.dig ?? false, options.upgradeOrder ?? [], options.craft ?? false,
-    options.target ?? false, options.targetRoom ?? '', options.targetCount ?? 0, options.targetStat ?? 'str');
+    options.target ?? false, options.targetRoom ?? '', options.targetCount ?? 0, options.targetStat ?? 'str', options.population ?? {});
   await settle();
   const task = context.__fengbaoShelterAuto;
   assert.ok(task, '托管任务已创建');
@@ -91,6 +96,232 @@ async function run(initial, options = {}, hooks = {}) {
   const stop = async () => { task.stopRequested = true; task.wake?.(); await settle(); assert.equal(task.running, false); };
   return { server, context, task, actions, requests, tick, stop, timers };
 }
+
+test('人口优化默认关闭；开启后满人口、连续待岗十分钟才按低分逐人清理，等待补员', async () => {
+  const state = populationFixture();
+  state.state.residents[0].stats = stats(5);
+  state.state.residents[1].stats = stats(8);
+  const disabled = await run(state);
+  await disabled.tick(600000);
+  assert.ok(!disabled.actions.some(action => action.type === 'dismiss'));
+  await disabled.stop();
+  const result = await run(state, { population: populationOptions });
+  assert.ok(!result.actions.some(action => action.type === 'dismiss'));
+  await result.tick(600000);
+  assert.deepEqual(result.actions.filter(action => action.type === 'dismiss').map(action => action.residentId), [1]);
+  await result.tick(600000);
+  assert.equal(result.actions.filter(action => action.type === 'dismiss').length, 1, '空余人口名额未补满时不继续清理');
+  result.server.state.residents.push(person(13, { parents: [101, 102], stats: stats(10) }));
+  await result.tick(600000);
+  assert.deepEqual(result.actions.filter(action => action.type === 'dismiss').map(action => action.residentId), [1, 2]);
+  await result.stop();
+});
+
+test('人口优化严格保留基础总属性60；自定义阈值独立于新人遣散条件', async () => {
+  for (const [score, total, expected] of [[59, 60, [1]], [60, 60, []], [60, 61, [1]]]) {
+    const state = populationFixture();
+    state.state.residents[0].stats = stats(8, { str: 10, per: score - 50 });
+    const result = await run(state, { population: { ...populationOptions, total } });
+    await result.tick(600000);
+    assert.deepEqual(result.actions.filter(action => action.type === 'dismiss').map(action => action.residentId), expected);
+    await result.stop();
+  }
+});
+
+test('人口优化要求足够待岗人数、满人口和实际可用补员来源', async () => {
+  for (const blocked of ['vacancy', 'idle', 'radio-empty', 'radio-upgrade', 'radio-power', 'radio-building']) {
+    const state = populationFixture();
+    state.state.residents[0].stats = stats(5);
+    if (blocked === 'vacancy') state.state.residents.pop();
+    if (blocked === 'idle') for (const resident of state.state.residents.slice(1, 8)) resident.adultAt = now + 3600000;
+    if (blocked === 'radio-empty') for (const resident of state.state.residents.slice(10)) resident.roomId = null;
+    if (blocked === 'radio-upgrade') state.state.rooms[1].upgradeAt = now + 3600000;
+    if (blocked === 'radio-power') state.state.rooms[1].unpowered = true;
+    if (blocked === 'radio-building') state.state.rooms[1].builtAt = now + 3600000;
+    // 空电台要避免高属性补岗重新形成可用招募来源。
+    if (blocked === 'radio-empty') state.state.rooms[1].craft = {};
+    const result = await run(state, { population: populationOptions });
+    await result.tick(600000);
+    assert.ok(!result.actions.some(action => action.type === 'dismiss'), blocked);
+    await result.stop();
+  }
+});
+
+test('人口优化保护岗位训练、儿童、外出、家庭、亲本、任务、挂载与装备，不用装备虚增属性', async () => {
+  for (const blocked of ['job', 'training', 'child', 'away', 'romance', 'cooldown', 'star', 'quest', 'birth', 'return', 'weapon', 'outfit', 'invalid']) {
+    const state = populationFixture();
+    const resident = state.state.residents[0];
+    resident.stats = stats(5);
+    const globals = {};
+    if (blocked === 'job' || blocked === 'training') {
+      resident.roomId = 3;
+      state.state.rooms.push(room(3, blocked === 'job' ? 'power' : 'training', { trainStat: 'str', upgradeAt: now + 3600000 }));
+    }
+    if (blocked === 'child') resident.adultAt = now + 3600000;
+    if (blocked === 'away') resident.away = {};
+    if (blocked === 'romance') resident.romance = { partnerId: 2, progress: 0.5 };
+    if (blocked === 'cooldown') resident.familyCooldownUntil = now + 3600000;
+    if (blocked === 'star') resident.name = '亲本★';
+    if (blocked === 'quest') state.state.quests = [{ id: 1, team: [1], status: 'active', returnAt: null }];
+    if (blocked === 'birth') state.state.births = [{ parents: [1, 2], dueAt: now + 3600000 }];
+    if (blocked === 'return') globals.__fengbaoDormAssignment = { monitoring: true, entries: [{ residentId: 1, originalRoomId: 2, status: 'waiting' }] };
+    if (blocked === 'weapon') resident.weaponId = 1;
+    if (blocked === 'outfit') resident.outfitId = 1;
+    if (blocked === 'invalid') delete resident.stats.str;
+    const result = await run(state, { population: populationOptions }, { globals });
+    await result.tick(600000);
+    assert.ok(!result.actions.some(action => action.type === 'dismiss'), blocked);
+    await result.stop();
+  }
+});
+
+test('人口优化先用达标成人补空位，跳过升级施工停电房间及归岗预留名额', async () => {
+  for (const blocked of ['none', 'upgrade', 'building', 'power', 'reserved']) {
+    const state = populationFixture();
+    const target = room(3, 'power');
+    state.state.rooms.push(target);
+    if (blocked === 'upgrade') target.upgradeAt = now + 3600000;
+    if (blocked === 'building') target.builtAt = now + 3600000;
+    if (blocked === 'power') target.unpowered = true;
+    const globals = blocked === 'reserved' ? { __fengbaoDormAssignment: { monitoring: true, entries:
+      [101, 102].map(residentId => ({ residentId, originalRoomId: 3, status: 'waiting' })) } } : {};
+    const result = await run(state, { population: populationOptions }, { globals });
+    const assignments = result.actions.filter(action => action.type === 'assign' && action.roomId === 3);
+    assert.equal(assignments.length, blocked === 'none' ? 2 : 0, blocked);
+    await result.stop();
+  }
+});
+
+test('人口优化支持已开启自动生育的合格配对补员来源，没有9+10组合则不清理', async () => {
+  for (const qualified of [false, true]) {
+    const state = populationFixture();
+    state.state.rooms[1].type = 'storage';
+    // 满人口时在岗父母不受宿舍清理影响，待释放名额后才参与生育。
+    state.state.residents[0].stats = stats(5);
+    state.state.residents[10].stats = stats(9);
+    state.state.residents[11].stats = stats(qualified ? 10 : 9);
+    // 其余待岗成人都与亲本有亲属关系，避免另选到10+10。
+    const result = await run(state, { population: populationOptions, birth: true });
+    await result.tick(600000);
+    assert.equal(result.actions.some(action => action.type === 'dismiss'), qualified);
+    await result.stop();
+  }
+});
+
+test('人口优化新电台成人严格按60筛选，每轮最多1人；60保留，批次队列跨轮处理', async () => {
+  const result = await run(populationFixture(), { population: populationOptions });
+  result.server.state.residents.push(person(20, { stats: stats(5) }), person(21, { stats: stats(6) }), person(22, { stats: stats(8, { str: 10, per: 10 }) }));
+  await result.tick(600000);
+  assert.deepEqual(result.actions.filter(action => action.type === 'dismiss').map(action => action.residentId), [20]);
+  assert.ok(result.server.state.residents.some(resident => resident.id === 22));
+  await result.tick(600000);
+  assert.deepEqual(result.actions.filter(action => action.type === 'dismiss').map(action => action.residentId), [20, 21]);
+  await result.stop();
+});
+
+test('人口优化遣散前刷新复核；候选属性、装备、人口、岗位或补员状态变化均取消', async () => {
+  for (const changed of ['stats', 'gear', 'population', 'job', 'radio', 'stop']) {
+    const state = populationFixture(); state.state.residents[0].stats = stats(5);
+    let collects = 0, reads = 0, mutated = false;
+    const result = await run(state, { population: populationOptions }, { before({ server, action, context }) {
+      if (action?.type === 'collect_all') { collects++; reads = 0; }
+      if (!action && collects === 2 && ++reads === 2) {
+        mutated = true;
+        if (changed === 'stats') server.state.residents[0].stats = stats(10);
+        if (changed === 'gear') server.state.residents[0].weaponId = 1;
+        if (changed === 'population') server.state.residents.pop();
+        if (changed === 'job') server.state.residents[0].roomId = 1;
+        if (changed === 'radio') server.state.rooms[1].unpowered = true;
+        if (changed === 'stop') context.__fengbaoShelterAuto.stopRequested = true;
+      }
+    } });
+    await result.tick(600000);
+    assert.ok(mutated, changed);
+    assert.ok(!result.actions.some(action => action.type === 'dismiss'), changed);
+    await result.stop();
+  }
+});
+
+test('人口优化遣散结果不明时停止，不自动重试或继续换人遣散', async () => {
+  for (const failure of ['network', 'unchanged', '5xx']) {
+    const state = populationFixture(); state.state.residents[0].stats = stats(5);
+    state.state.residents[1].stats = stats(6);
+    const result = await run(state, { population: populationOptions }, { before({ server, action }) {
+      if (action?.type !== 'dismiss') return;
+      if (failure === 'network') throw new Error('网络中断');
+      return { ok: failure === 'unchanged', status: failure === '5xx' ? 503 : 200, json: async () => ({ view: structuredClone(server) }) };
+    } });
+    await result.tick(600000);
+    assert.equal(result.task.running, false, failure);
+    assert.equal(result.actions.filter(action => action.type === 'dismiss').length, 1, failure);
+    assert.match(result.task.logs.join('\n'), /请核对本次遣散结果/);
+  }
+});
+
+test('人口优化拒绝无效参数，未创建任务前抛错', () => {
+  for (const options of [{ total: 0 }, { total: 71 }, { total: 59.5 }, { minIdle: 1 }, { minIdle: 201 }, { enabled: 'true' }]) {
+    const context = load();
+    assert.throws(() => context.startShelterAuto(600, 6, false, 60, false, 'end', 4, 1, false,
+      'auto', false, false, false, {}, false, false, [], false, false, '', 0, 'str', { enabled: true, ...options }), /人口优化/);
+    assert.equal(context.__fengbaoShelterAuto, undefined);
+  }
+});
+
+test('人口优化未开启时无效的禁用输入不阻止其他托管功能启动', async () => {
+  const result = await run(populationFixture(), { population: { enabled: false, total: NaN, minIdle: 0 } });
+  assert.equal(result.task.running, true);
+  assert.equal(result.task.populationOptions.total, 60);
+  assert.equal(result.task.populationOptions.minIdle, 5);
+  await result.stop();
+});
+
+test('人口优化即使缩短托管间隔，连续遣散也必须间隔十分钟', async () => {
+  const result = await run(populationFixture(), { population: populationOptions, interval: 60 });
+  result.server.state.residents.push(person(20, { stats: stats(5) }), person(21, { stats: stats(6) }));
+  await result.tick(60000);
+  assert.deepEqual(result.actions.filter(action => action.type === 'dismiss').map(action => action.residentId), [20]);
+  await result.tick(60000);
+  assert.equal(result.actions.filter(action => action.type === 'dismiss').length, 1);
+  await result.tick(540000);
+  assert.deepEqual(result.actions.filter(action => action.type === 'dismiss').map(action => action.residentId), [20, 21]);
+  await result.stop();
+});
+
+test('人口优化重新观察待岗，临时离开或返回时重新计时；普通事故暂停', async () => {
+  const state = populationFixture(); state.state.residents[0].stats = stats(5);
+  const result = await run(state, { population: populationOptions, interval: 60 });
+  result.server.state.residents[0].roomId = 1;
+  await result.tick(60000);
+  result.server.state.residents[0].roomId = null;
+  await result.tick(540000);
+  assert.ok(!result.actions.some(action => action.type === 'dismiss'));
+  result.server.state.rooms[1].incident = { kind: 'fire', since: 1 };
+  await result.tick(600000);
+  assert.ok(!result.actions.some(action => action.type === 'dismiss'));
+  result.server.state.rooms[1].incident = null;
+  await result.tick(60000);
+  assert.deepEqual(result.actions.filter(action => action.type === 'dismiss').map(action => action.residentId), [1]);
+  await result.stop();
+});
+
+test('人口优化保护待再次探险者和夜间延后救援者', async () => {
+  for (const protection of ['dispatch', 'deferred']) {
+    const state = populationFixture(); state.state.residents[0].stats = stats(5);
+    state.state.resources.stimpak = 0;
+    if (protection === 'deferred') state.serverTime = at(1);
+    const result = await run(state, { population: populationOptions });
+    if (protection === 'dispatch') result.task.pendingDispatch[1] = { healed: true, residentId: 1, stimpaks: 999 };
+    else result.task.incidentSnapshot = [{ residentId: 1, status: 'deferred', kind: 'rescue',
+      originalRoomId: null, expectedRoomId: null, incidentRoomId: 3, incidentRoomType: 'door', incidentKind: 'raiders',
+      incidentKey: JSON.stringify([3, 'raiders', 1]) }];
+    if (protection === 'deferred') {
+      result.server.state.rooms.push(room(3, 'door', { incident: { kind: 'raiders', since: 1 } }));
+    }
+    await result.tick(600000);
+    assert.ok(!result.actions.some(action => action.type === 'dismiss'), protection);
+    await result.stop();
+  }
+});
 
 test('造神目标排除升级、施工、停电和事故，并计入外出成人与挂载预留', () => {
   const state = view([person(1, { name: '亲本★', roomId: 1, stats: stats(10, { per: 9 }) })],

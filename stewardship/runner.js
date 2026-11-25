@@ -1,9 +1,18 @@
-function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled = false, dismissStatKey = 'end', dismissStat = 4, rescueCount = 1, rescueEnabled = true, rescueMode = 'auto', godEnabled = false, birthEnabled = false, questEnabled = false, trainingOptions = {}, upgradeEnabled = false, upgradeDigEnabled = false, upgradeOrder = [], craftOutfitsEnabled = false, targetEnabled = false, targetRoom = '', targetCount = 0, targetStat = 'str') {
+function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled = false, dismissStatKey = 'end', dismissStat = 4, rescueCount = 1, rescueEnabled = true, rescueMode = 'auto', godEnabled = false, birthEnabled = false, questEnabled = false, trainingOptions = {}, upgradeEnabled = false, upgradeDigEnabled = false, upgradeOrder = [], craftOutfitsEnabled = false, targetEnabled = false, targetRoom = '', targetCount = 0, targetStat = 'str', populationOptions = {}) {
   const previous = globalThis.__fengbaoShelterAuto;
   if (previous?.running) return;
   if (globalThis.__fengbaoWorkAssignment?.running || globalThis.__fengbaoDormAssignment?.running ||
       globalThis.__fengbaoEquipmentAssignment?.running || globalThis.__fengbaoResidentRename?.running) return;
   trainingOptions = workforceOptions(trainingOptions);
+  populationOptions = { enabled: false, total: 60, minIdle: 5, ...populationOptions };
+  const validPopulationTotal = Number.isInteger(populationOptions.total) && populationOptions.total >= 1 && populationOptions.total <= 70;
+  const validPopulationIdle = Number.isInteger(populationOptions.minIdle) && populationOptions.minIdle >= 2 && populationOptions.minIdle <= 200;
+  if (typeof populationOptions.enabled !== 'boolean' || populationOptions.enabled && (!validPopulationTotal || !validPopulationIdle)) {
+    throw new Error('人口优化：属性阈值须为 1–70，待岗人数须为 2–200 的整数');
+  }
+  // 关闭功能后，未填完的禁用控件不应阻止其他托管功能启动。
+  if (!validPopulationTotal) populationOptions.total = 60;
+  if (!validPopulationIdle) populationOptions.minIdle = 5;
   if (!Number.isInteger(intervalSeconds) || intervalSeconds < 1 || !Number.isInteger(recallEvents) || recallEvents < 1) throw new Error('间隔和事件次数必须为正整数');
   if (rescueEnabled && !['auto', 'workers'].includes(rescueMode)) throw new Error('请选择事件救援方式');
   if (rescueEnabled && rescueMode === 'auto' && (!Number.isInteger(rescueCount) || rescueCount < 1)) throw new Error('救援次数必须为正整数');
@@ -58,6 +67,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   const reuniteCooldownMs = 10 * 60000;
   task.incidentSnapshot = previous?.incidentSnapshot ?? null;
   task.incidentRescues = previous?.incidentRescues ?? {};
+  task.populationOptions = populationOptions;
+  task.populationIdleSince = {};
+  task.populationPending = previous?.populationPending ?? [];
+  task.populationLastDismissAt = previous?.populationLastDismissAt ?? null;
+  const populationWaitMs = 10 * 60000;
   globalThis.__fengbaoShelterAuto = task;
   // 日志直接写入扩展本地存储（注入脚本与 content script 同处扩展隔离环境），
   // 不依赖页面是否刷新过；仍然加载了日志桥接脚本时只在拿不到存储 API 时回退。
@@ -180,6 +194,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         assertView(data);
         if (data.switches?.frozen) throw new Error('避难所正在维护，稍后重试');
         view = data;
+        if (populationOptions.enabled) observePopulationIdle();
         return;
       } catch (error) {
         if (error.fatal) throw error;
@@ -204,6 +219,16 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       if (stopped()) return false;
       const resident = view.state.residents.find(item => item.id === action.residentId);
       const coordination = shelterCoordination(view);
+      if (mode === 'population' || mode === 'population-newcomer') {
+        const allowed = mode === 'population' ? populationCandidate()?.id === action.residentId :
+          task.populationPending.includes(action.residentId) && populationCanDismiss() &&
+          populationIdle(resident) && populationTotal(resident) < populationOptions.total && populationWithoutGear(resident);
+        if (!allowed || JSON.stringify([resident?.stats, resident?.weaponId, resident?.outfitId]) !== expectedGear) {
+          log('人口优化：居民、装备、待岗人数或补员条件已变化，取消本次遣散。');
+          return false;
+        }
+      }
+      if (mode === 'population-work' && (!populationIdle(resident) || populationTotal(resident) < populationOptions.total || incidentsBlockAutomation())) return false;
       if (mode === 'rescue' || action.type === 'rescue_incident') {
         const target = view.state.rooms.find(room => room.id === action.roomId);
         if (!blockingIncident(target) || incidentKey(target) !== expectedIncident) return false;
@@ -301,6 +326,10 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         }
         assertView(data.view);
         view = data.view;
+        if (mode === 'population' || mode === 'population-newcomer') {
+          if (view.state.residents.some(item => item.id === action.residentId)) throw fatal('人口优化：遣散结果未确认，已停止托管，请检查居民名单');
+          task.populationLastDismissAt = view.serverTime;
+        }
         // 收取房间数量直接使用游戏返回的结果说明。
         if (action.type === 'collect_all' && data.result?.message) log(`全部收取：${data.result.message}`);
         // 记录扩展主动搬动居民的时间；后续阶段和下一次快速检查据此让服务端先结算。
@@ -308,8 +337,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           task.recentMoves[action.residentId] = view.serverTime;
           for (const entry of task.parentReturns) if (entry.residentId === action.residentId && entry.status === 'waiting') entry.expectedRoomId = action.roomId;
         }
+        if (populationOptions.enabled) observePopulationIdle();
         return true;
       } catch (error) {
+        // 永久遣散不沿用一般动作的自动重试，结果不明时停止，避免换人继续清理。
+        if (mode === 'population' || mode === 'population-newcomer') throw fatal(`人口优化：${error.message}；已停止托管，请核对本次遣散结果`);
         if (error.fatal || error.permanent) throw error;
         last = error;
         if (attempt < 3) await wait(2000 * attempt);
@@ -824,6 +856,111 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     const capacity = Math.min(200, view.state.rooms.filter(room => room.type === 'quarters' && room.builtAt <= now)
       .reduce((sum, room) => sum + room.width * (2 + 2 * room.level), 0));
     return { living, capacity, full: living >= capacity };
+  }
+  function populationTotal(resident) {
+    const values = keys.map(key => resident?.stats?.[key]);
+    return values.every(value => Number.isInteger(value) && value >= 0 && value <= 10)
+      ? values.reduce((sum, value) => sum + value, 0) : NaN;
+  }
+  function populationIdle(resident) {
+    if (!resident || !Number.isFinite(populationTotal(resident))) return false;
+    return resident.roomId === null && resident.away === null && resident.deadAt === null &&
+      Number.isFinite(resident.adultAt) && resident.adultAt <= view.serverTime &&
+      typeof resident.name === 'string' && !resident.name.includes('★') &&
+      !resident.romance && !(resident.familyCooldownUntil > view.serverTime) &&
+      !protectedIds().has(resident.id) && !protectedResident(resident) &&
+      !task.autoParents.includes(resident.id) && !task.pendingDispatch[resident.id] &&
+      !view.state.explorers.some(explorer => explorer.residentId === resident.id) &&
+      !gateHeld(resident) && !dormWorkHeld(resident) && !pairPaused(resident);
+  }
+  function populationWithoutGear(resident) {
+    // 当前接口未承诺遣散后装备如何处理；只清理明确未携带装备的居民。
+    return resident?.weaponId === null && resident?.outfitId === null;
+  }
+  function observePopulationIdle() {
+    const next = {};
+    for (const resident of view.state.residents) if (populationIdle(resident)) {
+      const since = task.populationIdleSince[resident.id];
+      next[resident.id] = Number.isFinite(since) && since <= view.serverTime ? since : view.serverTime;
+    }
+    task.populationIdleSince = next;
+  }
+  function populationCanDismiss() {
+    return populationOptions.enabled && !incidentsBlockAutomation() && !stopped() &&
+      (task.populationLastDismissAt === null || view.serverTime - task.populationLastDismissAt >= populationWaitMs);
+  }
+  function populationHasRecruitment() {
+    // 电台必须实际值班且可用；没有补员来源时不能仅凭满人口持续减员。
+    if (view.state.rooms.some(room => room.type === 'radio' && !workforceRoomReasons(room, view.serverTime).length && !room.craft &&
+        view.state.residents.some(resident => resident.roomId === room.id && resident.away === null &&
+          resident.deadAt === null && resident.adultAt <= view.serverTime))) return true;
+    if (!task.birthEnabled) return false;
+    const dorms = view.state.rooms.filter(room => room.type === 'quarters' &&
+      !workforceRoomReasons(room, view.serverTime).length && !room.craft);
+    if (!dorms.length) return false;
+    const parents = view.state.residents.filter(resident => birthCandidate(resident) && resident.deadAt === null &&
+      resident.away === null && resident.adultAt <= view.serverTime && resident.happiness >= 50 &&
+      !(resident.familyCooldownUntil > view.serverTime) && !task.pendingDispatch[resident.id] &&
+      !questTeamIds().has(resident.id) && !view.state.births.some(birth => birth.parents.includes(resident.id)));
+    return parents.some((left, index) => parents.slice(index + 1).some(right => birthPairAllowed(left, right) &&
+      (!left.romance || left.romance.partnerId === right.id) && (!right.romance || right.romance.partnerId === left.id) &&
+      (dorms.some(room => left.roomId === room.id && right.roomId === room.id && safeBirthRoom(room.id, [left, right])) ||
+        availableForNewBirth(left) && availableForNewBirth(right) && pairCooldown(left, right) <= view.serverTime &&
+        dorms.some(room => freePairSlots(room) > 0 && safeBirthRoom(room.id, [left, right])))));
+  }
+  function populationCandidate() {
+    if (!populationCanDismiss()) return null;
+    const { full, capacity } = populationState();
+    if (!full || !(capacity > 0) || !populationHasRecruitment()) return null;
+    const idle = view.state.residents.filter(resident => populationIdle(resident) &&
+      Number.isFinite(task.populationIdleSince[resident.id]) &&
+      view.serverTime - task.populationIdleSince[resident.id] >= populationWaitMs);
+    if (idle.length < populationOptions.minIdle) return null;
+    return idle.filter(resident => populationTotal(resident) < populationOptions.total && populationWithoutGear(resident))
+      .sort((left, right) => populationTotal(left) - populationTotal(right) || left.id - right.id)[0] ?? null;
+  }
+  async function optimizePopulation() {
+    if (!populationOptions.enabled || stopped() || incidentsBlockAutomation()) return;
+    await read();
+    // 新到电台成人走同一总属性底线；旧的新人遣散配置仍独立生效。
+    task.populationPending = task.populationPending.filter(id => {
+      const resident = view.state.residents.find(item => item.id === id);
+      return populationIdle(resident) && populationTotal(resident) < populationOptions.total;
+    });
+    const rejected = task.populationPending.map(id => view.state.residents.find(resident => resident.id === id))
+      .filter(populationWithoutGear).sort((left, right) => populationTotal(left) - populationTotal(right) || left.id - right.id);
+    if (populationCanDismiss() && rejected.length) {
+      const resident = rejected[0];
+      if (!await act({ type: 'dismiss', residentId: resident.id }, 'population-newcomer')) return;
+      task.populationPending = task.populationPending.filter(id => id !== resident.id);
+      task.newcomers = task.newcomers.filter(id => id !== resident.id);
+      log(`人口优化：新居民 ${resident.name}（ID ${resident.id}）基础总属性 ${populationTotal(resident)} < ${populationOptions.total}，已遣散，继续等待合格补员。`);
+      return;
+    }
+    // 先让高属性待岗成人补生产空位；可用房间及归岗预留交给现有岗位模型检查。
+    const workers = view.state.residents.filter(resident => populationIdle(resident) && populationTotal(resident) >= populationOptions.total &&
+      !(task.birthEnabled && birthCandidate(resident)))
+      .sort((left, right) => populationTotal(right) - populationTotal(left) || left.id - right.id);
+    for (const original of workers) {
+      if (stopped() || incidentsBlockAutomation()) return;
+      const resident = view.state.residents.find(item => item.id === original.id);
+      if (!populationIdle(resident)) continue;
+      const room = chooseProductionRoom(resident);
+      if (!room) break;
+      if (!await act({ type: 'assign', residentId: resident.id, roomId: room.id }, 'population-work')) return;
+      if (view.state.residents.find(item => item.id === resident.id)?.roomId !== room.id) throw new Error('人口优化：高属性居民补岗结果未确认');
+      log(`人口优化：${resident.name}（基础总属性 ${populationTotal(resident)}）→ 房间 ${room.id}。`);
+    }
+    const candidate = populationCandidate();
+    if (!candidate) {
+      logQuiet('population:waiting', `人口优化：等待满人口、至少 ${populationOptions.minIdle} 名成人连续待岗 10 分钟及可用补员来源；阈值为基础总属性 < ${populationOptions.total}，携带装备者保留。`);
+      return;
+    }
+    const before = populationState();
+    if (!await act({ type: 'dismiss', residentId: candidate.id }, 'population')) return;
+    task.newcomers = task.newcomers.filter(id => id !== candidate.id);
+    delete task.populationIdleSince[candidate.id];
+    log(`人口优化：人口 ${before.living}/${before.capacity}，遣散待岗居民 ${candidate.name}（ID ${candidate.id}，基础总属性 ${populationTotal(candidate)} < ${populationOptions.total}），已腾出 1 个补员名额。`);
   }
   // 人口未满时，有合格伴侣的宿舍居民继续等待配对和感情结算。
   // 这些成年子代不参与普通岗位分配，统一交给宿舍清理流程处理：
@@ -2241,6 +2378,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           if (hasRadio) {
             for (const resident of view.state.residents) if (!task.knownIds.includes(resident.id) && resident.parents.length === 0 && resident.adultAt <= view.serverTime && resident.roomId === null && resident.away === null && resident.deadAt === null && !shelterCoordination(view).protectedIds.has(resident.id)) {
               if (stopped()) break;
+              if (populationOptions.enabled && populationIdle(resident) && populationTotal(resident) < populationOptions.total) {
+                if (!task.populationPending.includes(resident.id)) task.populationPending.push(resident.id);
+                task.newcomers.push(resident.id);
+                continue;
+              }
               // 只在首次发现门外新成人时判断，已有居民和旧待改名队列不参与遣散。
               if (dismissEnabled || dismissStatEnabled) {
                 const values = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'].map(key => resident.stats[key]);
@@ -2268,6 +2410,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
             let resident = view.state.residents.find(item => item.id === id);
             if (!resident || resident.roomId !== null || resident.away !== null || resident.deadAt !== null) { task.newcomers = task.newcomers.filter(item => item !== id); continue; }
             if (shelterCoordination(view).protectedIds.has(id)) continue;
+            if (populationOptions.enabled && task.populationPending.includes(id)) continue;
             const attributes = [['str', '力'], ['per', '感'], ['end', '耐'], ['cha', '魅'], ['int', '智'], ['agi', '敏'], ['lck', '幸']];
             const highest = Math.max(...attributes.map(([key]) => resident.stats[key]));
             const label = attributes.filter(([key]) => resident.stats[key] === highest).map(([,label]) => label).join('');
@@ -2326,6 +2469,8 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           if (stopped()) break;
           // 守门补齐后再让练满 70 的休息区居民补生产空位，避免守门被岗位抢人。
           if (godEnabled && !paused()) await assignIdleMaxedToJobs();
+          if (stopped()) break;
+          await optimizePopulation();
           if (stopped()) break;
           if (task.birthEnabled) {
             if (stopped()) break;
