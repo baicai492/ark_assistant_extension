@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const { randomUUID } = require('node:crypto');
 const { test } = require('node:test');
 const root = path.resolve(__dirname, '..');
-const scripts = ['stewardship/upgrade-plan.js', 'workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'];
+const scripts = ['stewardship/upgrade-plan.js', 'stewardship/target-plan.js', 'workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'];
 const source = scripts.map(file => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
 const keys = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'];
 const stats = (value = 5, extra = {}) => Object.assign(Object.fromEntries(keys.map(key => [key, value])), extra);
@@ -64,6 +64,8 @@ async function run(initial, options = {}, hooks = {}) {
       else if (action.type === 'upgrade') server.state.rooms.find(item => item.id === action.roomId).upgradeAt = server.serverTime + 3600000;
       else if (action.type === 'craft') server.state.rooms.find(item => item.id === action.roomId).craft = { tier: action.tier, doneAt: server.serverTime + 3600000 };
       else if (action.type === 'dig') server.state.digging = { floor: server.state.depth + 1 };
+      else if (action.type === 'build') server.state.rooms.push(room(Math.max(0, ...server.state.rooms.map(item => item.id)) + 1,
+        action.room, { floor: action.floor, col: action.col, trainStat: action.trainStat, builtAt: server.serverTime + 3600000 }));
     }
     await hooks.after?.({ server, action, actions, gets, context });
     return { ok: true, status: 200, redirected: false, json: async () => structuredClone(action ? { view: server } : server) };
@@ -71,7 +73,8 @@ async function run(initial, options = {}, hooks = {}) {
   context.startShelterAuto(600, 6, options.dismiss ?? false, options.total ?? 20,
     options.dismissStat ?? false, options.statKey ?? 'end', options.stat ?? 4, options.rescues ?? 1,
     options.rescue ?? false, options.mode ?? 'auto', options.god ?? false, options.birth ?? false, options.quest ?? false,
-    options.training ?? {}, options.upgrade ?? false, options.dig ?? false, options.upgradeOrder ?? [], options.craft ?? false);
+    options.training ?? {}, options.upgrade ?? false, options.dig ?? false, options.upgradeOrder ?? [], options.craft ?? false,
+    options.target ?? false, options.targetRoom ?? '', options.targetCount ?? 0, options.targetStat ?? 'str');
   await settle();
   const task = context.__fengbaoShelterAuto;
   assert.ok(task, '托管任务已创建');
@@ -263,6 +266,39 @@ test('自动周常可从废料站补齐队伍，保护其他生产岗位和挂�
 test('自动升级脚本可随重复开启托管多次注入', () => {
   const context = load();
   assert.doesNotThrow(() => vm.runInContext(fs.readFileSync(path.join(__dirname, 'upgrade-plan.js'), 'utf8'), context));
+  assert.doesNotThrow(() => vm.runInContext(fs.readFileSync(path.join(__dirname, 'target-plan.js'), 'utf8'), context));
+});
+
+test('目标建造从首个空楼层按格进行，未完成时暂停升级并遵守两个施工位', async () => {
+  const state = view([], [room(1, 'elevator', { floor: 1, col: 1 }), room(2, 'scrap', { floor: 1, col: 2 }),
+    room(3, 'elevator', { floor: 2, col: 1 })], { depth: 2, resources: { scrap: 10000, parts: 100 } });
+  const result = await run(state, { target: true, targetRoom: 'power', targetCount: 3, upgrade: true });
+  const builds = () => result.actions.filter(action => action.type === 'build');
+  assert.deepEqual(builds().map(action => [action.floor, action.col]), [[2, 2], [2, 3]]);
+  assert.ok(!result.actions.some(action => action.type === 'upgrade'));
+  await result.tick();
+  assert.equal(builds().length, 2);
+  result.server.state.rooms.forEach(room => { room.builtAt = 0; });
+  await result.tick();
+  assert.deepEqual(builds().map(action => [action.floor, action.col]), [[2, 2], [2, 3], [2, 4]]);
+  assert.ok(!result.actions.some(action => action.type === 'upgrade'));
+  result.server.state.rooms.forEach(room => { room.builtAt = 0; });
+  await result.tick();
+  assert.equal(builds().length, 3);
+  assert.ok(result.actions.some(action => action.type === 'upgrade'));
+  await result.stop();
+});
+
+test('目标建造独立运行并保留训练属性，夜间冻结放行而普通事故暂停', async () => {
+  for (const [kind, allowed] of [['raiders', true], ['fire', false]]) {
+    const state = view([], [room(1, 'door', { floor: 0, incident: { kind, since: 1 } }),
+      room(2, 'elevator', { floor: 1, col: 1 })], { depth: 1, resources: { scrap: 10000 } });
+    state.serverTime = at(1);
+    const result = await run(state, { target: true, targetRoom: 'training', targetCount: 1, targetStat: 'per' });
+    assert.deepEqual(result.actions.filter(action => action.type === 'build'),
+      allowed ? [{ type: 'build', room: 'training', floor: 1, col: 2, trainStat: 'per' }] : []);
+    await result.stop();
+  }
 });
 
 test('自动生育保留原生产与训练岗，确认家庭后回原岗，升级原岗等待恢复', async () => {
