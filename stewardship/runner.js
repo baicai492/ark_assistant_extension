@@ -784,7 +784,6 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   // 升级和挖层都只发普通动作，绝不使用星核汽水加速。每次检查最多开始一间升级，避免同时停掉多间生产。
   async function autoUpgrade(targetActive = false) {
     if (!task.upgradeEnabled) return;
-    if (view.state.rooms.some(room => room.incident)) return;
     const now = Date.now();
     for (const [id, until] of Object.entries(task.upgradeBlocked)) if (until <= now) delete task.upgradeBlocked[id];
     // 上一轮开始的升级完成后提示一次。
@@ -1841,12 +1840,6 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     if (stopped()) return;
     await applyOutfits();
     if (stopped()) return;
-    let targetActive = false;
-    if (task.targetEnabled) {
-      targetActive = await autoBuildTarget();
-      if (stopped()) return;
-    }
-    await autoUpgrade(targetActive);
   }
   (async () => {
     try {
@@ -1876,7 +1869,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
             // 每次开启重新记录已有名单，停用期间到来的居民也不参与自动遣散。
             task.knownIds = view.state.residents.map(resident => resident.id);
             greeted = true;
-            log(`托管开启：每 ${intervalSeconds} 秒检查，废土 ${recallEvents} 次事件召回${task.birthEnabled ? '，自动生育已开启' : ''}。`);
+            log(`托管开启：每 ${intervalSeconds} 秒检查，废土 ${recallEvents} 次事件召回${task.birthEnabled ? '，自动生育已开启' : ''}${task.targetEnabled ? `，目标建造 ${task.targetCount} 格${shelterUpgradeLabels[task.targetRoom] ?? task.targetRoom}` : ''}。`);
           }
           await act({ type: 'collect_all' });
           if (stopped()) break;
@@ -2097,9 +2090,10 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           else if (godEnabled || task.birthEnabled) await applyOutfits();
           if (stopped()) break;
           let targetActive = false;
-          if (task.targetEnabled && !paused()) targetActive = await autoBuildTarget();
+          // 目标建造和普通升级都是施工操作，与居民调度、事件无关；有施工位和资源就继续。
+          if (task.targetEnabled) targetActive = await autoBuildTarget();
           if (stopped()) break;
-          if (task.upgradeEnabled && !paused()) await autoUpgrade(targetActive);
+          if (task.upgradeEnabled) await autoUpgrade(targetActive);
           if (stopped()) break;
           log(view.state.explorers.length ? `废土检查：${view.state.explorers.length} 名探险者。` : '没有外出探险人员，跳过废土检查。');
           for (const original of [...view.state.explorers]) {
@@ -2190,12 +2184,14 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
                   // 转站后岗位属性可能变化，立即按新岗位重选一次装备，不必等下一完整轮。
                   if (!stopped() && !view.state.rooms.some(room => room.incident)) await applyOutfits();
                 }
-                let targetActive = false;
-                if (task.targetEnabled && !view.state.rooms.some(room => room.incident)) targetActive = await autoBuildTarget();
-                if (stopped()) break;
-                if (task.upgradeEnabled && !view.state.rooms.some(room => room.incident)) await autoUpgrade(targetActive);
               }
             }
+            if (stopped()) break;
+            // 目标建造和普通升级都是施工操作，与居民调度、事件无关；有施工位和资源就继续。
+            let targetActive = false;
+            if (task.targetEnabled) targetActive = await autoBuildTarget();
+            if (stopped()) break;
+            if (task.upgradeEnabled) await autoUpgrade(targetActive);
           } catch (error) {
             if (error.fatal) throw error;
             if (error.stopped || stopped()) break;
