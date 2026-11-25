@@ -7,6 +7,14 @@ function shelterRoomOrder() {
     : [{ key: `${type}:`, name, weight: type === 'storage' ? -100 : type === 'quarters' ? -20 : ['power', 'diner', 'water', 'medbay', 'workshop', 'scrap'].includes(type) ? 100 : 10 }]);
 }
 
+// 夜间大门掠夺者事件在游戏内冻结，不能阻塞房间整理。
+function shelterRoomIncidentBlocks(room, serverTime) {
+  if (!room?.incident) return false;
+  const date = new Date(serverTime);
+  const doorGuardRequired = !Number.isFinite(date.getTime()) || date.getHours() >= 8;
+  return !(room.type === 'door' && room.incident.kind === 'raiders' && !doorGuardRequired);
+}
+
 // 纯规划：先得到全部移动步骤，不在计算过程中调用游戏接口。
 function shelterRoomModel(view, order = shelterRoomOrder().map(item => item.key)) {
   const names = { power: '发电站', diner: '餐厅', water: '净水站', medbay: '医务室', workshop: '工坊', scrap: '废料回收站', training: '训练室', radio: '电台', armory: '武器工坊', tailor: '服装工坊', quarters: '宿舍', storage: '仓库' };
@@ -17,7 +25,7 @@ function shelterRoomModel(view, order = shelterRoomOrder().map(item => item.key)
       !Number.isInteger(state.depth) || !Number.isFinite(serverTime)) throw new Error('避难所数据格式已变化');
   if (view.switches?.frozen) throw new Error('避难所正在维护');
   for (const room of state.rooms) {
-    const reason = room.builtAt > serverTime ? '施工' : room.upgradeAt !== null ? '升级' : room.incident ? '事件' : room.craft ? '制作' : '';
+    const reason = room.builtAt > serverTime ? '施工' : room.upgradeAt !== null ? '升级' : shelterRoomIncidentBlocks(room, serverTime) ? '事件' : room.craft ? '制作' : '';
     if (reason) throw new Error(`${room.floor} 层${names[room.type] || room.type}（#${room.id}）正在${reason}，未启动整理`);
   }
   const rooms = state.rooms.filter(room => !['door', 'elevator'].includes(room.type));

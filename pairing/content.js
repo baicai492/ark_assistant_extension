@@ -29,8 +29,17 @@
         throw new Error(`居民「${resident.name ?? resident.id}」的数据不完整，无法计算`);
       }
       const reasons = [];
+      if ([...(globalThis.__fengbaoShelterAuto?.parentReturns ?? []), ...(globalThis.__fengbaoShelterAuto?.incidentSnapshot ?? [])]
+        .some(entry => entry.residentId === resident.id && entry.status === 'waiting')) reasons.push('托管配对或救援待归岗');
+      if ((view.state.quests ?? []).some(run => run.team?.includes(resident.id))) reasons.push('本周任务小队');
+      if ((view.state.births ?? []).some(birth => birth.parents.includes(resident.id))) reasons.push('有孩子待出生');
       // 按服务器时间判断是否成年，与游戏页面的儿童标记一致。
       if (resident.adultAt > view.serverTime) reasons.push('儿童（尚未成年）');
+      if (resident.away !== null) reasons.push('外出中');
+      if (resident.deadAt !== null) reasons.push('已倒下');
+      const currentRoom = view.state.rooms.find(room => room.id === resident.roomId);
+      if (currentRoom?.incident) reasons.push('正在处理事件');
+      if (['armory', 'tailor'].includes(currentRoom?.type) && currentRoom.craft) reasons.push('正在制作装备');
       // 有感情记录但已离开宿舍的居民可以重新参与配对。
       if (resident.romance && view.state.rooms.some(room => room.id === resident.roomId && room.type === 'quarters')) reasons.push('正在培养感情');
       // 使用服务器时间判断冷却，避免电脑时钟偏差导致误判。

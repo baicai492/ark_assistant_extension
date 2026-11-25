@@ -7,6 +7,8 @@
 
   (async () => {
     try {
+      if (globalThis.__fengbaoDormAssignment?.running) throw new Error('配对安排或归岗正在执行，请等待完成');
+      if (globalThis.__fengbaoEquipmentAssignment?.running) throw new Error('装备分配正在执行，请等待完成');
       if (location.origin !== 'https://game.arkengine.me' || !/^\/shelter\/?$/.test(location.pathname)) {
         throw new Error('请在自己的避难所页面使用');
       }
