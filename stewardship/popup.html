@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><title>一键托管</title><link rel="stylesheet" href="../module.css"><link rel="stylesheet" href="popup.css"></head>
 <body>
-  <h1>一键托管<button class="help-button" type="button" aria-label="一键托管说明" title="默认每 600 秒收取、救援、新人改名与安排、废土检查；废土默认 6 次事件后召回。救援默认开启，使用原生一键救援 1 次，可切换专人专救。两种救援都记录实际调动的人，同一事件不重复呼叫，结束后先恢复原岗。若 00:00 前派往大门且午夜仍未完成，先回原岗，08:00 再由同一居民重救；夜间掠夺者冻结且不阻塞安排，其他事件仍立即处理。重救前手动改岗或事件消失则取消。&#10;&#10;造神、自动生育、自动周常、自动升级默认关闭，按需开启；升级可附带挖层及按图鉴逐档制作服装，待归岗原房间暂不升级。造神或生育开启后，会补电粮水缺口、将同产品低级岗位迁向高级空位、补大门守卫并分配服装；保护外出成人占位、周常队员和待归岗名额。训练魅力和幸运默认关闭，可独立开启。&#10;&#10;新人按最高基础属性改名并安排空位，名字含 ★ 时保留原名。新人遣散仅处理本次托管开启后新来的电台成人，严格低于所选阈值才遣散，已有居民不遣散。&#10;&#10;接管已有探险：到家领取后按原区域、治疗针配置、深渊设置再出发；估算血量低于 60% 时先治疗一次，治疗针不足时等待。已派出的周常到家后领取，失败优先原班重试；勾选自动周常后才主动从门外闲置居民编新队。&#10;&#10;配对和救援记录会预留原岗。原房间升级、施工、停电、事故、满员或用途变化时等待；手动改岗后取消该人的归岗记录。关闭托管保留未完成记录，重新开启继续处理；刷新或关闭游戏页会清除内存记录。&#10;&#10;关闭面板继续运行。日志保存在扩展本地，保留最近 2000 条，可清空或导出。可选运行 tools/install-log-host.cmd 安装本地日志程序，追加写入 logs/shelter.log；未安装也可使用托管及扩展日志。">?</button></h1>
+  <h1>一键托管<button class="help-button" type="button" aria-label="一键托管说明" title="默认每 600 秒收取、救援、新人改名与安排、废土检查；废土默认 6 次事件后召回。救援默认开启，使用原生一键救援 1 次，可切换专人专救。两种救援都记录实际调动的人，同一事件不重复呼叫，结束后先恢复原岗。若 00:00 前派往大门且午夜仍未完成，先回原岗，08:00 再由同一居民重救；夜间掠夺者冻结且不阻塞安排，其他事件仍立即处理。重救前手动改岗或事件消失则取消。&#10;&#10;造神、自动生育、自动周常、目标建造、自动升级默认关闭，按需开启；升级可附带挖层及按图鉴逐档制作服装，待归岗原房间暂不升级。造神或生育开启后，会补电粮水缺口、将同产品低级岗位迁向高级空位、补大门守卫并分配服装；保护外出成人占位、周常队员和待归岗名额。训练魅力和幸运默认关闭，可独立开启。&#10;&#10;新人按最高基础属性改名并安排空位，名字含 ★ 时保留原名。新人遣散仅处理本次托管开启后新来的电台成人，严格低于所选阈值才遣散，已有居民不遣散。&#10;&#10;接管已有探险：到家领取后按原区域、治疗针配置、深渊设置再出发；估算血量低于 60% 时先治疗一次，治疗针不足时等待。已派出的周常到家后领取，失败优先原班重试；勾选自动周常后才主动从门外闲置居民编新队。&#10;&#10;配对和救援记录会预留原岗。原房间升级、施工、停电、事故、满员或用途变化时等待；手动改岗后取消该人的归岗记录。关闭托管保留未完成记录，重新开启继续处理；刷新或关闭游戏页会清除内存记录。&#10;&#10;关闭面板继续运行。日志保存在扩展本地，保留最近 2000 条，可清空或导出。可选运行 tools/install-log-host.cmd 安装本地日志程序，追加写入 logs/shelter.log；未安装也可使用托管及扩展日志。">?</button></h1>
   <form id="settings">
     <label for="interval">检查间隔（秒）<input id="interval" type="number" min="1" step="1" value="600" required></label>
     <label for="recall-events">废土触发事件后召回（次）<input id="recall-events" type="number" min="1" step="1" value="6" required></label>
@@ -63,6 +63,43 @@
         <p class="note">升级顺序（上→下），可用 ↑↓ 逐项调整：</p>
         <ol id="upgrade-order" aria-label="自动升级优先级顺序"></ol>
         <p class="note">升级、挖层和造服装都不使用星核汽水加速；每次检查最多开始一间升级，三者共用废料。</p>
+      </section>
+    </details>
+    <details id="target-section" class="feature">
+      <summary><input id="target-enabled" type="checkbox" aria-label="启用目标建造"><span>目标建造</span><button class="help-button" type="button" aria-label="目标建造说明" title="目标建造默认不勾选，不要求开启自动升级。勾选后选择建筑和格数：从最早只有电梯的空楼层开始连续建造（每层最多 6 格，相邻同类同级自动合并，最宽 3 格，按格数计数，每次检查最多开始两格）；目标完成前暂停普通升级，两个施工位都被占用时等任意一个空出就继续建造；进度保存在扩展本地，重新开启会接着建。">?</button></summary>
+      <section class="feature-options" aria-label="目标建造设置">
+        <div class="option-row">
+          <select id="target-room" aria-label="目标建筑" required>
+            <option value="" disabled selected>选择建筑</option>
+            <option value="power">发电站</option>
+            <option value="diner">餐厅</option>
+            <option value="water">净水站</option>
+            <option value="scrap">废料回收站</option>
+            <option value="quarters">宿舍</option>
+            <option value="storage">仓库</option>
+            <option value="medbay">医务室</option>
+            <option value="training">训练室</option>
+            <option value="workshop">零件工坊</option>
+            <option value="armory">武器工坊</option>
+            <option value="tailor">服装工坊</option>
+            <option value="radio">电台</option>
+          </select>
+          <input id="target-count" type="number" aria-label="目标建造格数" min="1" step="1" value="12" required>
+          <span>格</span>
+        </div>
+        <div class="option-row" id="target-stat-row" hidden>
+          <span>训练属性</span>
+          <select id="target-stat" aria-label="目标训练属性">
+            <option value="str">力量</option>
+            <option value="per">感知</option>
+            <option value="end">耐力</option>
+            <option value="cha">魅力</option>
+            <option value="int">智力</option>
+            <option value="agi">敏捷</option>
+            <option value="lck">幸运</option>
+          </select>
+        </div>
+        <p class="note" id="target-note">目标建造从最早只有电梯的空楼层开始，按格连续建到指定数量；每层最多 6 格，相邻同类同级会自动合并（最宽 3 格）。目标完成前暂停房间升级；两个施工位都占用时，等任意一个空出就继续建造。目标进度保存在扩展本地，重新开启托管会接着建。</p>
       </section>
     </details>
     <div class="actions"><button id="toggle" disabled>开启</button></div>

@@ -40,6 +40,12 @@ const upgradeEnabled = document.querySelector('#upgrade-enabled');
 const upgradeSection = document.querySelector('#upgrade-section');
 const upgradeDigEnabled = document.querySelector('#upgrade-dig-enabled');
 const upgradeCraftEnabled = document.querySelector('#upgrade-craft-enabled');
+const targetSection = document.querySelector('#target-section');
+const targetEnabled = document.querySelector('#target-enabled');
+const targetRoom = document.querySelector('#target-room');
+const targetCount = document.querySelector('#target-count');
+const targetStat = document.querySelector('#target-stat');
+const targetStatRow = document.querySelector('#target-stat-row');
 const upgradeOrderList = document.querySelector('#upgrade-order');
 const toggle = document.querySelector('#toggle');
 const status = document.querySelector('#status');
@@ -184,6 +190,11 @@ function updateOptions() {
   dismissStatKey.disabled = dismissStat.disabled = running || !dismissNewcomers.checked || !dismissStatEnabled.checked;
   upgradeDigEnabled.disabled = running || !upgradeEnabled.checked;
   upgradeCraftEnabled.disabled = running || !upgradeEnabled.checked;
+  targetEnabled.disabled = running;
+  targetRoom.disabled = running || !targetEnabled.checked;
+  targetCount.disabled = running || !targetEnabled.checked;
+  targetStat.disabled = running || !targetEnabled.checked || targetRoom.value !== 'training';
+  targetStatRow.hidden = targetRoom.value !== 'training';
   // 第一项不能上移、最后一项不能下移；运行中顺序已锁定。
   [...upgradeOrderList.children].forEach((item, index) => {
     const [up, down] = item.querySelectorAll('button');
@@ -196,8 +207,9 @@ function updateOptions() {
   if (!birthEnabled.checked) birthSection.open = false;
   if (!questEnabled.checked) questSection.open = false;
   if (!upgradeEnabled.checked) upgradeSection.open = false;
+  if (!targetEnabled.checked) targetSection.open = false;
 }
-for (const [section, checkbox] of [[rescueSection, rescueEnabled], [dismissSection, dismissNewcomers], [godSection, godEnabled], [birthSection, birthEnabled], [questSection, questEnabled], [upgradeSection, upgradeEnabled]]) {
+for (const [section, checkbox] of [[rescueSection, rescueEnabled], [dismissSection, dismissNewcomers], [godSection, godEnabled], [birthSection, birthEnabled], [questSection, questEnabled], [upgradeSection, upgradeEnabled], [targetSection, targetEnabled]]) {
   section.querySelector('summary').addEventListener('click', event => {
     // 标题点击交给勾选框处理，由 change 事件统一联动展开与收起。
     if (event.target.tagName === 'SPAN' && !checkbox.disabled) {
@@ -208,6 +220,7 @@ for (const [section, checkbox] of [[rescueSection, rescueEnabled], [dismissSecti
   checkbox.addEventListener('change', () => { section.open = checkbox.checked; updateOptions(); });
 }
 for (const radio of [rescueAuto, rescueWorkers, dismissEnabled, dismissStatEnabled]) radio.addEventListener('change', updateOptions);
+targetRoom.addEventListener('change', updateOptions);
 godEnabled.addEventListener('change', () => {
   if (godEnabled.checked) {
     godCycle = null;
@@ -267,7 +280,7 @@ async function refresh() {
   clearTimeout(polling);
   const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: () => {
     const task = globalThis.__fengbaoShelterAuto;
-    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, questEnabled: task.questEnabled, upgradeEnabled: task.upgradeEnabled, upgradeDigEnabled: task.upgradeDigEnabled, craftOutfitsEnabled: task.craftOutfitsEnabled, upgradeOrder: task.upgradeOrder, trainingOptions: task.trainingOptions, parentReturns: task.parentReturns, incidentSnapshot: task.incidentSnapshot, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
+    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, questEnabled: task.questEnabled, upgradeEnabled: task.upgradeEnabled, upgradeDigEnabled: task.upgradeDigEnabled, craftOutfitsEnabled: task.craftOutfitsEnabled, targetEnabled: task.targetEnabled, targetRoom: task.targetRoom, targetCount: task.targetCount, targetStat: task.targetStat, upgradeOrder: task.upgradeOrder, trainingOptions: task.trainingOptions, parentReturns: task.parentReturns, incidentSnapshot: task.incidentSnapshot, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
   } });
   const task = result.result;
   running = Boolean(task?.running);
@@ -293,11 +306,15 @@ async function refresh() {
     upgradeEnabled.checked = Boolean(task.upgradeEnabled);
     upgradeDigEnabled.checked = Boolean(task.upgradeDigEnabled);
     upgradeCraftEnabled.checked = Boolean(task.craftOutfitsEnabled);
+    targetEnabled.checked = Boolean(task.targetEnabled);
+    targetRoom.value = task.targetRoom || '';
+    targetCount.value = task.targetCount ?? 12;
+    targetStat.value = task.targetStat ?? 'str';
     renderUpgradeOrder(task.upgradeOrder ?? defaultUpgradeOrder);
   }
   if (!running) {
     // 关闭托管后功能分组统一收起，勾选状态保留，下次开启不用重新设置。
-    for (const section of [rescueSection, dismissSection, godSection, birthSection, questSection, upgradeSection]) section.open = false;
+    for (const section of [rescueSection, dismissSection, godSection, birthSection, questSection, upgradeSection, targetSection]) section.open = false;
   }
   updateOptions();
   status.textContent = running && task?.stopRequested ? '正在关闭托管…' : task?.message ?? '尚未开启托管。';
@@ -348,8 +365,8 @@ settings.addEventListener('submit', async event => {
     } else {
       await savedSettings.save();
       await chrome.storage.local.set({ shelterUpgradeOrder: upgradeOrder });
-      await chrome.scripting.executeScript({ target: { tabId }, files: ['stewardship/upgrade-plan.js', 'workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'] });
-      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, trainingOptions(), upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder, upgradeEnabled.checked && upgradeCraftEnabled.checked] });
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['stewardship/upgrade-plan.js', 'stewardship/target-plan.js', 'workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'] });
+      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, trainingOptions(), upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder, upgradeEnabled.checked && upgradeCraftEnabled.checked, targetEnabled.checked, targetRoom.value, Number(targetCount.value), targetStat.value] });
       chrome.runtime.sendMessage({ type: 'fengbao-shelter-log-watch', tabId, running: true }).catch(() => {});
     }
     await refresh();

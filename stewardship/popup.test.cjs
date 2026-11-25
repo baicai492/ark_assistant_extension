@@ -42,7 +42,7 @@ async function popup({ task = null, saved, stored = {}, hostError = false } = {}
     globalThis.__fengbaoShelterAuto = { running: true, intervalSeconds: args[0], recallEvents: args[1],
       dismissEnabled: args[2], dismissTotal: args[3], dismissStatEnabled: args[4], dismissStatKey: args[5], dismissStat: args[6],
       rescueCount: args[7], rescueEnabled: args[8], rescueMode: args[9], godEnabled: args[10], birthEnabled: args[11],
-      questEnabled: args[12], trainingOptions: args[13], upgradeEnabled: args[14], upgradeDigEnabled: args[15], upgradeOrder: args[16], craftOutfitsEnabled: args[17], logs: [], parentReturns: [], message: '运行中' };
+      questEnabled: args[12], trainingOptions: args[13], upgradeEnabled: args[14], upgradeDigEnabled: args[15], upgradeOrder: args[16], craftOutfitsEnabled: args[17], targetEnabled: args[18], targetRoom: args[19], targetCount: args[20], targetStat: args[21], logs: [], parentReturns: [], message: '运行中' };
   }`, page);
   const context = vm.createContext({
     document: { getElementById: id => elements.get(id), querySelector(selector) { assert.ok(elements.has(selector.slice(1)), selector); return elements.get(selector.slice(1)); },
@@ -118,6 +118,22 @@ test('托管设置保存升级挖层造服装选项，重开后恢复并按相�
   assert.equal(reopened.page.selected[17], true);
   assert.equal(reopened.elements.get('upgrade-enabled').disabled, true);
   assert.equal(reopened.elements.get('upgrade-order').children.length, 13);
+});
+
+test('目标建造控件独立保存恢复，启动参数不挤占训练偏好及升级选项', async () => {
+  const ui = await popup();
+  ui.elements.get('target-enabled').checked = true;
+  ui.elements.get('target-room').value = 'training';
+  ui.elements.get('target-count').value = '12';
+  ui.elements.get('target-stat').value = 'agi';
+  await ui.elements.get('target-enabled').emit('change');
+  const reopened = await popup({ stored: ui.store });
+  assert.equal(reopened.elements.get('target-enabled').checked, true);
+  assert.equal(reopened.elements.get('target-stat').disabled, false);
+  await reopened.elements.get('settings').emit('submit');
+  assert.deepEqual(Array.from(reopened.page.selected.slice(18)), [true, 'training', 12, 'agi']);
+  assert.equal(reopened.page.selected[14], false);
+  assert.deepEqual(JSON.parse(JSON.stringify(reopened.page.selected[13])), { trainCharisma: false, trainLuck: false });
 });
 
 test('日志导出和清空可用，本地日志未安装时保留托管能力并显示错误', async () => {
