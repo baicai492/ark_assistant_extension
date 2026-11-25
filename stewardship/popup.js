@@ -15,6 +15,11 @@ const dismissTotal = document.querySelector('#dismiss-total');
 const dismissStatEnabled = document.querySelector('#dismiss-stat-enabled');
 const dismissStatKey = document.querySelector('#dismiss-stat-key');
 const dismissStat = document.querySelector('#dismiss-stat');
+const populationEnabled = document.querySelector('#population-enabled');
+const populationSection = document.querySelector('#population-section');
+const populationOptions = document.querySelector('#population-options');
+const populationTotal = document.querySelector('#population-total');
+const populationMinIdle = document.querySelector('#population-min-idle');
 const godEnabled = document.querySelector('#god-enabled');
 const trainCharisma = document.querySelector('#train-charisma');
 const trainLuck = document.querySelector('#train-luck');
@@ -188,6 +193,8 @@ function updateOptions() {
   dismissOptions.disabled = running || !dismissNewcomers.checked;
   dismissTotal.disabled = running || !dismissNewcomers.checked || !dismissEnabled.checked;
   dismissStatKey.disabled = dismissStat.disabled = running || !dismissNewcomers.checked || !dismissStatEnabled.checked;
+  populationEnabled.disabled = running;
+  populationOptions.disabled = populationTotal.disabled = populationMinIdle.disabled = running || !populationEnabled.checked;
   upgradeDigEnabled.disabled = running || !upgradeEnabled.checked;
   upgradeCraftEnabled.disabled = running || !upgradeEnabled.checked;
   targetEnabled.disabled = running;
@@ -203,13 +210,14 @@ function updateOptions() {
   });
   if (!rescueEnabled.checked) rescueSection.open = false;
   if (!dismissNewcomers.checked) dismissSection.open = false;
+  if (!populationEnabled.checked) populationSection.open = false;
   if (!godEnabled.checked) godSection.open = false;
   if (!birthEnabled.checked) birthSection.open = false;
   if (!questEnabled.checked) questSection.open = false;
   if (!upgradeEnabled.checked) upgradeSection.open = false;
   if (!targetEnabled.checked) targetSection.open = false;
 }
-for (const [section, checkbox] of [[rescueSection, rescueEnabled], [dismissSection, dismissNewcomers], [godSection, godEnabled], [birthSection, birthEnabled], [questSection, questEnabled], [upgradeSection, upgradeEnabled], [targetSection, targetEnabled]]) {
+for (const [section, checkbox] of [[rescueSection, rescueEnabled], [dismissSection, dismissNewcomers], [populationSection, populationEnabled], [godSection, godEnabled], [birthSection, birthEnabled], [questSection, questEnabled], [upgradeSection, upgradeEnabled], [targetSection, targetEnabled]]) {
   section.querySelector('summary').addEventListener('click', event => {
     // 标题点击交给勾选框处理，由 change 事件统一联动展开与收起。
     if (event.target.tagName === 'SPAN' && !checkbox.disabled) {
@@ -280,7 +288,7 @@ async function refresh() {
   clearTimeout(polling);
   const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: () => {
     const task = globalThis.__fengbaoShelterAuto;
-    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, questEnabled: task.questEnabled, upgradeEnabled: task.upgradeEnabled, upgradeDigEnabled: task.upgradeDigEnabled, craftOutfitsEnabled: task.craftOutfitsEnabled, targetEnabled: task.targetEnabled, targetRoom: task.targetRoom, targetCount: task.targetCount, targetStat: task.targetStat, upgradeOrder: task.upgradeOrder, trainingOptions: task.trainingOptions, parentReturns: task.parentReturns, incidentSnapshot: task.incidentSnapshot, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
+    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, populationOptions: task.populationOptions, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, questEnabled: task.questEnabled, upgradeEnabled: task.upgradeEnabled, upgradeDigEnabled: task.upgradeDigEnabled, craftOutfitsEnabled: task.craftOutfitsEnabled, targetEnabled: task.targetEnabled, targetRoom: task.targetRoom, targetCount: task.targetCount, targetStat: task.targetStat, upgradeOrder: task.upgradeOrder, trainingOptions: task.trainingOptions, parentReturns: task.parentReturns, incidentSnapshot: task.incidentSnapshot, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
   } });
   const task = result.result;
   running = Boolean(task?.running);
@@ -297,6 +305,9 @@ async function refresh() {
     dismissNewcomers.checked = task.dismissEnabled || task.dismissStatEnabled;
     if (dismissNewcomers.checked) { dismissEnabled.checked = task.dismissEnabled; dismissStatEnabled.checked = task.dismissStatEnabled; }
     dismissTotal.value = task.dismissTotal;
+    populationEnabled.checked = task.populationOptions?.enabled === true;
+    populationTotal.value = task.populationOptions?.total ?? 60;
+    populationMinIdle.value = task.populationOptions?.minIdle ?? 5;
     if (task.dismissStatEnabled) { dismissStatKey.value = task.dismissStatKey; dismissStat.value = task.dismissStat; }
     // 面板重新打开时功能分组保持折叠，勾选状态从任务恢复即可；
     // 只有用户手动点开时才展开，运行中的轮询不再自动展开。
@@ -314,7 +325,7 @@ async function refresh() {
   }
   if (!running) {
     // 关闭托管后功能分组统一收起，勾选状态保留，下次开启不用重新设置。
-    for (const section of [rescueSection, dismissSection, godSection, birthSection, questSection, upgradeSection, targetSection]) section.open = false;
+    for (const section of [rescueSection, dismissSection, populationSection, godSection, birthSection, questSection, upgradeSection, targetSection]) section.open = false;
   }
   updateOptions();
   status.textContent = running && task?.stopRequested ? '正在关闭托管…' : task?.message ?? '尚未开启托管。';
@@ -366,7 +377,7 @@ settings.addEventListener('submit', async event => {
       await savedSettings.save();
       await chrome.storage.local.set({ shelterUpgradeOrder: upgradeOrder });
       await chrome.scripting.executeScript({ target: { tabId }, files: ['stewardship/upgrade-plan.js', 'stewardship/target-plan.js', 'workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'] });
-      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, trainingOptions(), upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder, upgradeEnabled.checked && upgradeCraftEnabled.checked, targetEnabled.checked, targetRoom.value, Number(targetCount.value), targetStat.value] });
+      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining, population) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining, population); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, trainingOptions(), upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder, upgradeEnabled.checked && upgradeCraftEnabled.checked, targetEnabled.checked, targetRoom.value, Number(targetCount.value), targetStat.value, { enabled: populationEnabled.checked, total: Number(populationTotal.value), minIdle: Number(populationMinIdle.value) }] });
       chrome.runtime.sendMessage({ type: 'fengbao-shelter-log-watch', tabId, running: true }).catch(() => {});
     }
     await refresh();

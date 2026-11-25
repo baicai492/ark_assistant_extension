@@ -42,7 +42,7 @@ async function popup({ task = null, saved, stored = {}, hostError = false } = {}
     globalThis.__fengbaoShelterAuto = { running: true, intervalSeconds: args[0], recallEvents: args[1],
       dismissEnabled: args[2], dismissTotal: args[3], dismissStatEnabled: args[4], dismissStatKey: args[5], dismissStat: args[6],
       rescueCount: args[7], rescueEnabled: args[8], rescueMode: args[9], godEnabled: args[10], birthEnabled: args[11],
-      questEnabled: args[12], trainingOptions: args[13], upgradeEnabled: args[14], upgradeDigEnabled: args[15], upgradeOrder: args[16], craftOutfitsEnabled: args[17], targetEnabled: args[18], targetRoom: args[19], targetCount: args[20], targetStat: args[21], logs: [], parentReturns: [], message: '运行中' };
+      questEnabled: args[12], trainingOptions: args[13], upgradeEnabled: args[14], upgradeDigEnabled: args[15], upgradeOrder: args[16], craftOutfitsEnabled: args[17], targetEnabled: args[18], targetRoom: args[19], targetCount: args[20], targetStat: args[21], populationOptions: args[22], logs: [], parentReturns: [], message: '运行中' };
   }`, page);
   const context = vm.createContext({
     document: { getElementById: id => elements.get(id), querySelector(selector) { assert.ok(elements.has(selector.slice(1)), selector); return elements.get(selector.slice(1)); },
@@ -131,7 +131,7 @@ test('目标建造控件独立保存恢复，启动参数不挤占训练偏好�
   assert.equal(reopened.elements.get('target-enabled').checked, true);
   assert.equal(reopened.elements.get('target-stat').disabled, false);
   await reopened.elements.get('settings').emit('submit');
-  assert.deepEqual(Array.from(reopened.page.selected.slice(18)), [true, 'training', 12, 'agi']);
+  assert.deepEqual(Array.from(reopened.page.selected.slice(18, 22)), [true, 'training', 12, 'agi']);
   assert.equal(reopened.page.selected[14], false);
   assert.deepEqual(JSON.parse(JSON.stringify(reopened.page.selected[13])), { trainCharisma: false, trainLuck: false });
 });
@@ -147,4 +147,37 @@ test('日志导出和清空可用，本地日志未安装时保留托管能力�
   assert.equal(cleared, true);
   assert.match(ui.elements.get('status').textContent, /本地日志文件清空失败.*未安装/);
   assert.equal(ui.elements.get('toggle').disabled, false);
+});
+
+test('人口优化默认关闭、阈值60和待岗5人，设置保存并追加传参，不改原新人遣散配置', async () => {
+  const ui = await popup();
+  assert.equal(ui.elements.get('population-enabled').checked, false);
+  assert.equal(ui.elements.get('population-total').value, '60');
+  assert.equal(ui.elements.get('population-min-idle').value, '5');
+  assert.equal(ui.elements.get('population-total').disabled, true);
+  ui.elements.get('population-enabled').checked = true;
+  ui.elements.get('population-total').value = '63';
+  ui.elements.get('population-min-idle').value = '8';
+  await ui.elements.get('population-enabled').emit('change');
+  assert.equal(ui.elements.get('population-total').disabled, false);
+  const reopened = await popup({ stored: ui.store });
+  assert.equal(reopened.elements.get('population-enabled').checked, true);
+  assert.equal(reopened.elements.get('population-total').value, 63);
+  await reopened.elements.get('settings').emit('submit');
+  assert.deepEqual(JSON.parse(JSON.stringify(reopened.page.selected[22])), { enabled: true, total: 63, minIdle: 8 });
+  assert.equal(reopened.page.selected[2], false);
+  assert.equal(reopened.page.selected[4], false);
+  assert.equal(reopened.elements.get('population-enabled').disabled, true);
+  assert.equal(reopened.elements.get('population-min-idle').disabled, true);
+});
+
+test('人口优化运行参数优先于本地配置，旧任务无该参数时维持关闭', async () => {
+  const task = { running: true, intervalSeconds: 600, recallEvents: 6, dismissTotal: 60,
+    populationOptions: { enabled: true, total: 60, minIdle: 7 }, parentReturns: [], logs: [] };
+  const ui = await popup({ task, stored: { 'fengbao-settings-stewardship': { 'population-total': 65 } } });
+  assert.equal(ui.elements.get('population-total').value, 60);
+  assert.equal(ui.elements.get('population-min-idle').value, 7);
+  delete task.populationOptions;
+  await ui.context.refresh();
+  assert.equal(ui.elements.get('population-enabled').checked, false);
 });

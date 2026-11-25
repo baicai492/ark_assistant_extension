@@ -22,6 +22,9 @@
     const all = residents.map(resident => {
       if (!Number.isFinite(resident.id) || typeof resident.name !== 'string' ||
           !Number.isFinite(resident.adultAt) || !Number.isFinite(resident.xp) || !Number.isFinite(resident.happiness) ||
+          (resident.deadAt !== null && !Number.isFinite(resident.deadAt)) ||
+          (resident.away !== null && (!resident.away || typeof resident.away !== 'object')) ||
+          (resident.roomId !== null && !Number.isFinite(resident.roomId)) ||
           !keys.every(key => Number.isFinite(resident.stats?.[key])) ||
           (resident.romance != null && (!Number.isFinite(resident.romance.partnerId) || !Number.isFinite(resident.romance.progress))) ||
           (resident.familyCooldownUntil != null && !Number.isFinite(resident.familyCooldownUntil))) {
@@ -41,6 +44,8 @@
         `${room.floor} 层 ${room.level} 级${roomNames[room.type]}${room.type === 'training' ? `·${statNames[room.trainStat]}` : ''} ×${room.width}（房间 ${room.id}）` : '门外待命';
       return {
         id: resident.id, name: resident.name, stats, level, reasons, room: location, adultAt: resident.adultAt,
+        isAdult: resident.adultAt <= now, isAway: resident.away !== null, isDown: resident.deadAt !== null,
+        isIdle: resident.adultAt <= now && resident.away === null && resident.deadAt === null && resident.roomId === null,
         total: stats.reduce((sum, value) => sum + value, 0),
         combatPower: level * 2 + resident.stats.str + resident.stats.end + resident.stats.agi
       };
