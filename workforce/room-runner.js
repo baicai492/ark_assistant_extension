@@ -3,11 +3,15 @@
   // 复用居民安排锁和结果区域，宿舍安排与托管均会检查这个锁。
   const task = { running: true, message: '正在检查房间并规划整理顺序…', moved: 0, split: 0, merged: 0, rooms: [], excluded: [], rates: null };
   globalThis.__fengbaoWorkAssignment = task;
-  const order = globalThis.__fengbaoRoomOrder;
   (async () => {
     try {
+      if (globalThis.__fengbaoDormAssignment?.monitoring) throw new Error('配对挂载仍有待归岗居民，请先在配对页结束挂载并完成归岗，再整理房间');
+      const auto = globalThis.__fengbaoShelterAuto;
+      if ([...(auto?.parentReturns ?? []), ...(auto?.incidentSnapshot ?? [])].some(entry => entry.status === 'waiting')) {
+        throw new Error('托管仍有待归岗居民，请先重新开启托管并完成归岗，再整理房间');
+      }
       if (location.origin !== 'https://game.arkengine.me' || !/^\/shelter\/?$/.test(location.pathname)) throw new Error('请在自己的避难所页面使用');
-      if (globalThis.__fengbaoDormAssignment?.running || globalThis.__fengbaoResidentRename?.running) throw new Error('其他居民任务正在运行，请等待完成');
+      if (globalThis.__fengbaoDormAssignment?.running || globalThis.__fengbaoResidentRename?.running || globalThis.__fengbaoEquipmentAssignment?.running) throw new Error('其他居民任务正在运行，请等待完成');
       async function read() {
         const response = await fetch('/api/shelter', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15000) });
         if (!response.ok || response.redirected) throw new Error('读取避难所失败或登录已失效');
@@ -24,7 +28,7 @@
       }, {})).sort(([a], [b]) => a.localeCompare(b)));
       const originalComposition = composition(view.state);
       const residents = new Map(view.state.residents.map(resident => [resident.id, resident.roomId]));
-      const plan = planShelterRooms(view, order);
+      const plan = planShelterRooms(view, globalThis.__fengbaoRoomOrder);
       function showRooms(rooms) {
         const { names } = shelterRoomModel(view);
         task.rooms = [];

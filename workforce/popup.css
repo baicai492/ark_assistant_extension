@@ -1,9 +1,16 @@
 body { max-height: 400px; overflow-y: auto; padding: 14px; }
-#rates { padding: 10px; border: 1px solid #e5e0f0; border-radius: 9px; color: #69548f; background: #faf9fd; white-space: pre-line; }
-#rooms, #excluded-list { padding-left: 18px; overflow-wrap: anywhere; }
-#rooms li, #excluded-list li { margin: 6px 0; }
+#rates, #long-term-rates { padding: 10px; border: 1px solid #e5e0f0; border-radius: 9px; color: #69548f; background: #faf9fd; white-space: pre-line; }
+#rooms, #excluded-list, #unavailable-room-list { padding-left: 18px; overflow-wrap: anywhere; }
+#rooms li, #excluded-list li, #unavailable-room-list li { margin: 6px 0; }
 summary { cursor: pointer; color: #69548f; }
-#excluded-list { color: #778296; font-size: 12px; }
+#excluded-list, #unavailable-room-list { color: #778296; font-size: 12px; }
+select { max-width: 220px; padding: 7px 8px; border: 1px solid #dce1ec; border-radius: 8px; background: #fff; color: #283750; font: inherit; }
+fieldset { margin: 12px 0; padding: 0 10px 6px; border: 1px solid #e5e0f0; border-radius: 9px; }
+legend { padding: 0 5px; color: #69548f; }
+fieldset label { font-size: 12px; }
+fieldset .hint { margin: 6px 0; }
+#stop { width: 100%; padding: 8px 12px; }
+select:focus-visible { outline: 2px solid #8873c5; outline-offset: 2px; }
 
 #room-order { padding: 0; list-style: none; }
 #room-order li { display: flex; align-items: center; justify-content: space-between; margin: 6px 0; padding: 6px 10px; border: 1px solid #e5e0f0; border-radius: 8px; background: #faf9fd; }

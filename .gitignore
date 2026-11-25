@@ -2,3 +2,5 @@
 _tmp/
 tmp/
 logs/
+comparison/
+tmp-*/
