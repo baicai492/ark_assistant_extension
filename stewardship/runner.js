@@ -1,4 +1,4 @@
-function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled = false, dismissStatKey = 'end', dismissStat = 4, rescueCount = 1, rescueEnabled = true, rescueMode = 'auto', godEnabled = false, birthEnabled = false, questEnabled = false, trainingOptions = {}, upgradeEnabled = false, upgradeDigEnabled = false, upgradeOrder = [], craftOutfitsEnabled = false) {
+function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled = false, dismissStatKey = 'end', dismissStat = 4, rescueCount = 1, rescueEnabled = true, rescueMode = 'auto', godEnabled = false, birthEnabled = false, questEnabled = false, trainingOptions = {}, upgradeEnabled = false, upgradeDigEnabled = false, upgradeOrder = [], craftOutfitsEnabled = false, targetEnabled = false, targetRoom = '', targetCount = 0, targetStat = 'str') {
   const previous = globalThis.__fengbaoShelterAuto;
   if (previous?.running) return;
   if (globalThis.__fengbaoWorkAssignment?.running || globalThis.__fengbaoDormAssignment?.running ||
@@ -11,6 +11,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   if (upgradeEnabled && !Array.isArray(upgradeOrder)) throw new Error('升级顺序格式不正确');
   if (upgradeEnabled && typeof planRoomUpgrades !== 'function') throw new Error('自动升级脚本未加载，请重新打开扩展面板');
   if (craftOutfitsEnabled && !upgradeEnabled) throw new Error('自动造服装需要同时开启自动升级');
+  if (targetEnabled && (typeof shelterTargetStatus !== 'function' || !shelterTargetBuildable.includes(targetRoom) ||
+      !Number.isInteger(targetCount) || targetCount < 1)) throw new Error('请选择目标建筑并填写正整数格数');
+  if (targetEnabled && targetRoom === 'training' && !['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'].includes(targetStat)) throw new Error('请选择目标训练属性');
   const statLabels = { str: '力量', per: '感知', end: '耐力', cha: '魅力', int: '智力', agi: '敏捷', lck: '幸运' };
   const roomLabels = { power: '发电站', diner: '餐厅', water: '净水站', scrap: '废料回收站', workshop: '零件工坊', medbay: '医务室', radio: '电台', training: '训练室' };
   const keys = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'];
@@ -22,7 +25,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   const outfitCraftMaxTier = room => Math.min(6, 2 * (Number(room.level) || 0));
   if (dismissStatEnabled && !Object.hasOwn(statLabels, dismissStatKey)) throw new Error('请选择单项遣散的指定属性');
   if (dismissStatEnabled && (!Number.isInteger(dismissStat) || dismissStat < 1 || dismissStat > 10)) throw new Error('单项属性遣散阈值必须为 1–10 的整数');
-  const task = { running: true, cycleRunning: true, trainingOptions, parentReturns: previous?.parentReturns ?? [], stopRequested: false, intervalSeconds, rescueEnabled, rescueMode, rescueCount, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, godEnabled, birthEnabled: Boolean(birthEnabled), questEnabled: Boolean(questEnabled), upgradeEnabled: Boolean(upgradeEnabled), upgradeDigEnabled: Boolean(upgradeDigEnabled), craftOutfitsEnabled: Boolean(craftOutfitsEnabled), upgradeOrder: typeof normalizeShelterUpgradeOrder === 'function' ? normalizeShelterUpgradeOrder(upgradeOrder) : [], upgradeBlocked: previous?.upgradeBlocked ?? {}, upgradingRooms: previous?.upgradingRooms ?? {}, craftBlocked: previous?.craftBlocked ?? {}, lastDigFloor: previous?.lastDigFloor ?? null, logs: previous?.logs ?? [], message: '正在开启托管…', nextAt: null, pendingDispatch: previous?.pendingDispatch ?? {}, newcomers: previous?.newcomers ?? [], knownIds: previous?.knownIds ?? null, deployments: previous?.deployments ?? {}, autoParents: previous?.autoParents ?? [], autoAssigned: previous?.autoAssigned ?? [], autoPairs: previous?.autoPairs ?? [], pairAttempts: previous?.pairAttempts ?? {}, pairFailedUntil: previous?.pairFailedUntil ?? {}, recentEvictions: previous?.recentEvictions ?? {}, pairLogAt: previous?.pairLogAt ?? {}, evictCounts: previous?.evictCounts ?? {}, evictHoldUntil: previous?.evictHoldUntil ?? {}, recentMoves: previous?.recentMoves ?? {}, pendingWorkBlocked: previous?.pendingWorkBlocked ?? {}, pendingWorkDone: previous?.pendingWorkDone ?? {}, dormWorkHold: previous?.dormWorkHold ?? {}, reuniteAt: previous?.reuniteAt ?? {}, gateHold: previous?.gateHold ?? {}, questRetries: previous?.questRetries ?? {}, questWeek: previous?.questWeek ?? null, questDone: previous?.questDone ?? [], questStartBlocked: previous?.questStartBlocked ?? {}, questLogAt: previous?.questLogAt ?? {}, questDoneNotice: previous?.questDoneNotice ?? false };
+  const task = { running: true, cycleRunning: true, trainingOptions, parentReturns: previous?.parentReturns ?? [], stopRequested: false, intervalSeconds, rescueEnabled, rescueMode, rescueCount, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, godEnabled, birthEnabled: Boolean(birthEnabled), questEnabled: Boolean(questEnabled), upgradeEnabled: Boolean(upgradeEnabled), upgradeDigEnabled: Boolean(upgradeDigEnabled), craftOutfitsEnabled: Boolean(craftOutfitsEnabled), targetEnabled: Boolean(targetEnabled), targetRoom: String(targetRoom || ''), targetCount: Number(targetCount) || 0, targetStat: ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'].includes(targetStat) ? targetStat : 'str', targetProgress: previous?.targetProgress ?? null, targetBlockedUntil: previous?.targetBlockedUntil ?? 0, targetBlockedReason: previous?.targetBlockedReason ?? '', upgradeOrder: typeof normalizeShelterUpgradeOrder === 'function' ? normalizeShelterUpgradeOrder(upgradeOrder) : [], upgradeBlocked: previous?.upgradeBlocked ?? {}, upgradingRooms: previous?.upgradingRooms ?? {}, craftBlocked: previous?.craftBlocked ?? {}, lastDigFloor: previous?.lastDigFloor ?? null, logs: previous?.logs ?? [], message: '正在开启托管…', nextAt: null, pendingDispatch: previous?.pendingDispatch ?? {}, newcomers: previous?.newcomers ?? [], knownIds: previous?.knownIds ?? null, deployments: previous?.deployments ?? {}, autoParents: previous?.autoParents ?? [], autoAssigned: previous?.autoAssigned ?? [], autoPairs: previous?.autoPairs ?? [], pairAttempts: previous?.pairAttempts ?? {}, pairFailedUntil: previous?.pairFailedUntil ?? {}, recentEvictions: previous?.recentEvictions ?? {}, pairLogAt: previous?.pairLogAt ?? {}, evictCounts: previous?.evictCounts ?? {}, evictHoldUntil: previous?.evictHoldUntil ?? {}, recentMoves: previous?.recentMoves ?? {}, pendingWorkBlocked: previous?.pendingWorkBlocked ?? {}, pendingWorkDone: previous?.pendingWorkDone ?? {}, dormWorkHold: previous?.dormWorkHold ?? {}, reuniteAt: previous?.reuniteAt ?? {}, gateHold: previous?.gateHold ?? {}, questRetries: previous?.questRetries ?? {}, questWeek: previous?.questWeek ?? null, questDone: previous?.questDone ?? [], questStartBlocked: previous?.questStartBlocked ?? {}, questLogAt: previous?.questLogAt ?? {}, questDoneNotice: previous?.questDoneNotice ?? false };
   // 游戏每 10 分钟结算一次感情，临时配对至少要撑过一次结算；2 分钟太短，
   // 服务端换房后扩展会提前放弃，随后又把两人搬回宿舍，造成来回切换。
   const pairGraceMs = 12 * 60000;
@@ -1103,10 +1106,101 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     }
   }
 
+  const activeConstructionCount = () => view.state.rooms.filter(room =>
+    Number(room.upgradeAt) > view.serverTime || Number(room.builtAt) > view.serverTime).length;
+  // 目标建造：从最早的纯电梯空楼层开始，按格连续建指定房间。
+  // 目标未完成时暂停普通房间升级；已有 2 项施工/升级时只等待空位。
+  async function autoBuildTarget() {
+    if (!task.targetEnabled) return false;
+    if (incidentsBlockAutomation()) return true;
+    if (typeof shelterTargetStatus !== 'function') throw new Error('目标建造脚本未加载，请重新打开扩展面板');
+    const room = task.targetRoom;
+    const count = Math.max(0, Math.floor(Number(task.targetCount) || 0));
+    if (!room || count < 1 || !shelterTargetBuildable.includes(room)) return false;
+    const trainStat = room === 'training' ? task.targetStat : null;
+    let progress = task.targetProgress;
+    if (!progress || progress.room !== room || (progress.trainStat ?? null) !== trainStat ||
+        !Number.isInteger(Number(progress.startFloor)) || Number(progress.startFloor) < 1 ||
+        Number(progress.startFloor) > Number(view.state.depth)) {
+      const startFloor = shelterTargetEarliestEmptyFloor(view);
+      if (startFloor === null) {
+        logQuiet('target:no-floor', '目标建造：没有空楼层，等待挖层。', 30 * 60000);
+        return true;
+      }
+      progress = { room, trainStat, startFloor };
+      task.targetProgress = progress;
+      if (logStorage) {
+        try { await logStorage.set({ shelterTargetProgress: progress }); } catch {}
+      }
+      log(`目标建造：从第 ${startFloor} 层开始建 ${count} 格${shelterUpgradeLabels[room] ?? room}。`);
+    }
+    const options = { room, count, trainStat, startFloor: progress.startFloor };
+    let status = shelterTargetStatus(view, options);
+    if (!status.configured) return false;
+    if (status.complete) {
+      logQuiet(`target:done:${room}:${count}:${progress.startFloor}`, `目标建造：${count} 格${shelterUpgradeLabels[room] ?? room}已完成。`, 30 * 60000);
+      return false;
+    }
+    if (status.cells >= count && status.activeCells > 0) {
+      logQuiet('target:wait-build', `目标建造：等待最后 ${status.activeCells} 格施工完成。`, 10 * 60000);
+      return true;
+    }
+    if (Number(task.targetBlockedUntil) > Date.now()) {
+      logQuiet('target:blocked', `目标建造：${task.targetBlockedReason || '上次建造失败'}，稍后再试。`, 10 * 60000);
+      return true;
+    }
+    const active = activeConstructionCount();
+    if (active >= 2) {
+      logQuiet('target:slots', '目标建造：两个施工位都被升级/建造占用，等空出一个就继续建造。', 60 * 60000);
+      return true;
+    }
+    // 按可用施工位一次最多开始两格；每格都按最新状态重新计算位置和造价。
+    for (let slot = active; slot < 2; slot++) {
+      if (stopped()) return true;
+      status = shelterTargetStatus(view, options);
+      if (!status.configured || status.complete) break;
+      if (status.cells >= count && status.activeCells > 0) break;
+      const next = status.next;
+      if (!next) {
+        logQuiet('target:no-space', '目标建造：没有可用的空楼层或空位，等待挖层。', 30 * 60000);
+        break;
+      }
+      const scrap = Number(view.state.resources?.scrap) || 0;
+      if (scrap < next.cost) {
+        logQuiet('target:resource', `目标建造：废料不足，下一格需 ${next.cost}，当前 ${Math.floor(scrap)}。`, 30 * 60000);
+        break;
+      }
+      const beforeCells = status.cells;
+      try {
+        if (!await act({ type: 'build', room, floor: next.floor, col: next.col, trainStat })) break;
+      } catch (error) {
+        if (error.fatal || error.stopped) throw error;
+        const message = error?.message || '建造失败';
+        if (/施工|最多|上限|满/.test(message)) {
+          logQuiet('target:slots-error', `目标建造：施工位已满（${message}），等待空位。`, 60 * 60000);
+        } else {
+          task.targetBlockedUntil = Date.now() + 5 * 60000;
+          task.targetBlockedReason = message;
+          log(`目标建造：第 ${next.floor} 层第 ${next.col} 列建${shelterUpgradeLabels[room] ?? room}失败：${message}，5 分钟后再试。`);
+          try { await read(); } catch (readError) { if (readError.fatal || readError.stopped) throw readError; }
+        }
+        break;
+      }
+      if (stopped()) return true;
+      const after = shelterTargetStatus(view, options);
+      if (!after.configured || after.cells <= beforeCells) {
+        log('目标建造：建造结果未确认，稍后再试。');
+        break;
+      }
+      log(`目标建造：第 ${next.floor} 层第 ${next.col} 列开始建${shelterUpgradeLabels[room] ?? room}（第 ${after.cells}/${count} 格），花费 ${next.cost} 废料。`);
+      if (after.complete) break;
+    }
+    return true;
+  }
   // 自动升级与挖层：按面板顺序升级房间，同类先升低等级；有人工作的房间也升级，居民留在原房间。
   // 没有正在挖掘时顺带开始下一层。
   // 升级和挖层都只发普通动作，绝不使用星核汽水加速。每次检查最多开始一间升级，避免同时停掉多间生产。
-  async function autoUpgrade() {
+  async function autoUpgrade(targetActive = false) {
     if (!task.upgradeEnabled) return;
     if (incidentsBlockAutomation()) return;
     const now = Date.now();
@@ -1154,10 +1248,10 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       await autoCraftOutfits();
       if (stopped()) return;
     }
+    if (targetActive) return;
     // 游戏最多同时 2 间房间施工，挖层不占施工位。空位不足时只等待，
     // 不能继续逐间尝试，否则每间都会收到“同时最多 2 项施工”并被误封 30 分钟。
-    const active = view.state.rooms.filter(room =>
-      Number(room.upgradeAt) > view.serverTime || Number(room.builtAt) > view.serverTime).length;
+    const active = activeConstructionCount();
     if (active >= 2) {
       logQuiet('upgrade:slots-full', '自动升级：已有 2 间在施工，等待空位。', 60 * 60000);
       return;
@@ -2092,12 +2186,23 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     if (stopped()) return;
     await applyOutfits();
     if (stopped()) return;
-    await autoUpgrade();
+    let targetActive = false;
+    if (task.targetEnabled) {
+      targetActive = await autoBuildTarget();
+      if (stopped()) return;
+    }
+    await autoUpgrade(targetActive);
   }
   (async () => {
     try {
       if (location.origin !== 'https://game.arkengine.me' || !/^\/shelter\/?$/.test(location.pathname)) throw new Error('请在自己的避难所页面开启');
       if (globalThis.__fengbaoWorkAssignment?.running || globalThis.__fengbaoDormAssignment?.running || globalThis.__fengbaoEquipmentAssignment?.running || globalThis.__fengbaoResidentRename?.running) throw new Error('其他居民任务正在运行，请等待完成');
+      if (task.targetEnabled && logStorage) {
+        try {
+          const stored = await logStorage.get('shelterTargetProgress');
+          if (stored?.shelterTargetProgress) task.targetProgress = stored.shelterTargetProgress;
+        } catch {}
+      }
       let greeted = false, roundError = false, consecutiveErrors = 0;
       while (!stopped()) {
         if (globalThis.__fengbaoDormAssignment?.running || globalThis.__fengbaoWorkAssignment?.running || globalThis.__fengbaoEquipmentAssignment?.running || globalThis.__fengbaoResidentRename?.running) {
@@ -2253,7 +2358,10 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           if ((godEnabled || task.birthEnabled) && paused()) log('装备分配：事件处理中，暂停换装。');
           else if (godEnabled || task.birthEnabled) await applyOutfits();
           if (stopped()) break;
-          if (task.upgradeEnabled && !paused()) await autoUpgrade();
+          let targetActive = false;
+          if (task.targetEnabled && !paused()) targetActive = await autoBuildTarget();
+          if (stopped()) break;
+          if (task.upgradeEnabled && !paused()) await autoUpgrade(targetActive);
           if (stopped()) break;
           log(view.state.explorers.length ? `废土检查：${view.state.explorers.length} 名探险者。` : '没有外出探险人员，跳过废土检查。');
           for (const original of [...view.state.explorers]) {
@@ -2320,9 +2428,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         // 成年子代、待产父母、练满训练项的居民和装备不必等完整间隔：等待期间每 30 秒快速检查一次。
         // 只开自动周常或造神计划时也每 30 秒检查，及时编队出发、撤出练满的居民。
         while (!stopped() && Date.now() < nextAt) {
-          await wait(Math.min(task.birthEnabled || task.questEnabled || godEnabled || task.upgradeEnabled || task.parentReturns.length || task.incidentSnapshot?.length ? 30000 : intervalSeconds * 1000, nextAt - Date.now()));
+          await wait(Math.min(task.birthEnabled || task.questEnabled || godEnabled || task.upgradeEnabled || task.targetEnabled || task.parentReturns.length || task.incidentSnapshot?.length ? 30000 : intervalSeconds * 1000, nextAt - Date.now()));
           if (stopped()) break;
-          if (!task.birthEnabled && !task.questEnabled && !godEnabled && !task.upgradeEnabled && !task.parentReturns.length && !task.incidentSnapshot?.length) continue;
+          if (!task.birthEnabled && !task.questEnabled && !godEnabled && !task.upgradeEnabled && !task.targetEnabled && !task.parentReturns.length && !task.incidentSnapshot?.length) continue;
           if (globalThis.__fengbaoDormAssignment?.running || globalThis.__fengbaoWorkAssignment?.running ||
               globalThis.__fengbaoEquipmentAssignment?.running || globalThis.__fengbaoResidentRename?.running) continue;
           task.cycleRunning = true;
@@ -2333,7 +2441,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
               if (await handleIncidents() || stopped()) continue;
               if (!stopped()) await returnPairedParents();
               if (!stopped()) await handleWeeklyQuests();
-              if (!stopped()) await autoUpgrade();
+              let targetActive = false;
+              if (!stopped() && task.targetEnabled) targetActive = await autoBuildTarget();
+              if (!stopped()) await autoUpgrade(targetActive);
             }
           } catch (error) {
             if (error.fatal) throw error;
