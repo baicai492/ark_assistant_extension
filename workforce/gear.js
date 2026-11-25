@@ -14,19 +14,20 @@ function planOutfits(view) {
   // 宿舍、门外和仓库也不产生属性收益。大门按耐力。
   const statByRoom = {
     door: 'end', power: 'str', diner: 'agi', water: 'per', scrap: 'end',
-    medbay: 'int', workshop: 'int', armory: 'str', tailor: 'cha', radio: 'cha'
+    medbay: 'int', workshop: 'int', armory: 'str', tailor: 'cha'
   };
   const rooms = new Map(state.rooms.map(room => [room.id, room]));
   const items = state.items.filter(item => item?.slot === 'outfit' && item.bonus && typeof item.bonus === 'object' &&
     keys.every(key => item.bonus[key] == null || Number.isFinite(item.bonus[key])));
+  const protectedIds = shelterCoordination(view).protectedIds;
   const wornBy = new Map();
   for (const resident of state.residents) if (resident.outfitId != null) wornBy.set(resident.outfitId, resident);
   // 训练室按游戏说明“服装不影响训练速度”，不占用服装；生产房间按岗位属性；
   // 宿舍、门外和外出居民没有目标属性。
   function target(resident) {
-    if (resident.deadAt !== null || resident.away !== null || resident.adultAt > now) return null;
+    if (protectedIds.has(resident.id) || resident.deadAt !== null || resident.away !== null || resident.adultAt > now) return null;
     const room = rooms.get(resident.roomId);
-    if (!room) return null;
+    if (!room || workforceRoomReasons(room, now).length || room.craft) return null;
     return statByRoom[room.type] ?? null;
   }
   const totalBonus = item => keys.reduce((sum, key) => sum + (Number(item.bonus[key]) || 0), 0);
@@ -45,7 +46,9 @@ function planOutfits(view) {
   // 外出或倒下居民身上的服装无法转交；其余服装都可以参与全局分配。
   const lockedItems = new Set();
   for (const [itemId, owner] of wornBy) {
-    if (owner.away !== null || owner.deadAt !== null) lockedItems.add(itemId);
+    const room = rooms.get(owner.roomId);
+    if (protectedIds.has(owner.id) || owner.adultAt > now || owner.away !== null || owner.deadAt !== null ||
+        workforceIncidentBlocksAutomation(room, view) || room?.craft) lockedItems.add(itemId);
   }
   const usable = items.filter(item => !lockedItems.has(item.id));
   // 收集所有“居民 × 对该岗位有加成的服装”组合，按加成价值全局排序后依次分配。

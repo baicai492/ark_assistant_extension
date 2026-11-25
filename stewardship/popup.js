@@ -16,6 +16,19 @@ const dismissStatEnabled = document.querySelector('#dismiss-stat-enabled');
 const dismissStatKey = document.querySelector('#dismiss-stat-key');
 const dismissStat = document.querySelector('#dismiss-stat');
 const godEnabled = document.querySelector('#god-enabled');
+const trainCharisma = document.querySelector('#train-charisma');
+const trainLuck = document.querySelector('#train-luck');
+const trainingInputs = [trainCharisma, trainLuck];
+const trainingOptions = () => ({ trainCharisma: trainCharisma.checked, trainLuck: trainLuck.checked });
+try {
+  const saved = JSON.parse(localStorage.getItem('fengbao-auto-training') || localStorage.getItem('fengbao-workforce-options') || '{}');
+  trainCharisma.checked = saved.trainCharisma === true;
+  trainLuck.checked = saved.trainLuck === true;
+} catch { /* 不可读时保留默认值。 */ }
+for (const input of trainingInputs) input.addEventListener('change', () => {
+  try { localStorage.setItem('fengbao-auto-training', JSON.stringify(trainingOptions())); } catch {}
+  if (godEnabled.checked && tabId != null) refreshGodParents().catch(showGodError);
+});
 const godSection = document.querySelector('#god-section');
 const godStatus = document.querySelector('#god-status');
 const godParents = document.querySelector('#god-parents');
@@ -35,6 +48,17 @@ const logFile = document.querySelector('#log-file');
 const logHost = 'com.fengbao.shelter_log';
 const exportLogs = document.querySelector('#export-logs');
 const clearLogs = document.querySelector('#clear-logs');
+const returnParents = document.querySelector('#return-parents');
+returnParents.addEventListener('click', async () => {
+  await chrome.scripting.executeScript({ target: { tabId }, func: () => {
+    const task = globalThis.__fengbaoShelterAuto;
+    if (!task?.running) return;
+    task.birthEnabled = false;
+    task.returnRequested = true;
+    task.wake?.();
+  } });
+  await refresh();
+});
 let tabId, running = false, polling, godCycle;
 // 与托管脚本保持一致：面板只读取并显示最近一段日志。
 const logLimit = 2000;
@@ -100,12 +124,12 @@ function moveUpgrade(key, delta) {
 }
 
 clearLogs.addEventListener('click', async () => {
-  await chrome.storage.local.remove('shelterLogs');
   // 同时清掉页面里的内存日志，避免刷新间隔内又作为兜底显示出来。
-  await chrome.scripting.executeScript({ target: { tabId }, func: () => {
+  await chrome.scripting.executeScript({ target: { tabId }, func: async () => {
     const task = globalThis.__fengbaoShelterAuto;
-    if (task) task.logs = [];
-  } }).catch(() => {});
+    if (task?.clearLogs) await task.clearLogs();
+    else { if (task) task.logs = []; await chrome.storage.local.remove('shelterLogs'); }
+  } }).catch(() => chrome.storage.local.remove('shelterLogs'));
   // 本地日志文件通过后台队列清空，确保排在进行中的追加写入之后。
   let clearedFile = true, clearError = '';
   try {
@@ -152,6 +176,7 @@ exportLogs.addEventListener('click', async () => {
   status.textContent = `日志已下载：${name}`;
 });
 function updateOptions() {
+  for (const input of trainingInputs) input.disabled = running;
   rescueOptions.disabled = running || !rescueEnabled.checked;
   rescueCount.disabled = running || !rescueEnabled.checked || !rescueAuto.checked;
   dismissOptions.disabled = running || !dismissNewcomers.checked;
@@ -194,12 +219,12 @@ renderUpgradeOrder();
 async function refreshGodParents() {
   godStatus.textContent = '正在读取造神亲本训练情况…';
   await chrome.scripting.executeScript({ target: { tabId }, files: ['workforce/planner.js', 'stewardship/god-plan.js'] });
-  const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: async () => {
+  const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: async options => {
     const response = await fetch('/api/shelter', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15000) });
     if (!response.ok || response.redirected) throw new Error('读取训练情况失败或登录已失效');
     const view = await response.json();
-    return { parents: planShelterGod(view).parents, paused: view.state.rooms.some(room => room.incident) };
-  } });
+    return { parents: planShelterGod(view, new Set(), false, false, options).parents, paused: view.state.rooms.some(room => room.incident) || Boolean(globalThis.__fengbaoShelterAuto?.incidentSnapshot) };
+  }, args: [trainingOptions()] });
   if (!godEnabled.checked) return;
   const { parents, paused } = result.result;
   godStatus.textContent = parents.length ? `造神亲本 ${parents.length} 人${paused ? '，事件处理中，暂停调动。' : '，下一站按当前空位预估。'}` : '训练室内暂无造神亲本。';
@@ -232,6 +257,7 @@ function showGodError(error) { godStatus.textContent = `读取造神亲本失败
 async function checkLogHost() {
   try {
     const response = await chrome.runtime.sendNativeMessage(logHost, { command: 'ping' });
+    if (response?.error || response?.ok !== true) throw new Error(response?.error || '本地日志程序未确认可用');
     logFile.textContent = response?.file ? `本地日志文件：${response.file}` : '本地日志 host 返回异常。';
   } catch {
     logFile.textContent = '本地日志未安装：到扩展管理页重新加载后，双击项目里的 tools/install-log-host.cmd 安装一次。';
@@ -241,7 +267,7 @@ async function refresh() {
   clearTimeout(polling);
   const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: () => {
     const task = globalThis.__fengbaoShelterAuto;
-    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, questEnabled: task.questEnabled, upgradeEnabled: task.upgradeEnabled, upgradeDigEnabled: task.upgradeDigEnabled, craftOutfitsEnabled: task.craftOutfitsEnabled, upgradeOrder: task.upgradeOrder, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
+    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, questEnabled: task.questEnabled, upgradeEnabled: task.upgradeEnabled, upgradeDigEnabled: task.upgradeDigEnabled, craftOutfitsEnabled: task.craftOutfitsEnabled, upgradeOrder: task.upgradeOrder, trainingOptions: task.trainingOptions, parentReturns: task.parentReturns, incidentSnapshot: task.incidentSnapshot, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
   } });
   const task = result.result;
   running = Boolean(task?.running);
@@ -251,6 +277,8 @@ async function refresh() {
   toggle.formNoValidate = running;
   interval.disabled = recall.disabled = rescueEnabled.disabled = dismissNewcomers.disabled = godEnabled.disabled = birthEnabled.disabled = questEnabled.disabled = upgradeEnabled.disabled = running;
   if (running) {
+    trainCharisma.checked = task.trainingOptions?.trainCharisma === true;
+    trainLuck.checked = task.trainingOptions?.trainLuck === true;
     interval.value = task.intervalSeconds; recall.value = task.recallEvents;
     rescueEnabled.checked = task.rescueEnabled; rescueAuto.checked = task.rescueMode === 'auto'; rescueWorkers.checked = task.rescueMode === 'workers'; rescueCount.value = task.rescueCount;
     dismissNewcomers.checked = task.dismissEnabled || task.dismissStatEnabled;
@@ -272,11 +300,18 @@ async function refresh() {
     for (const section of [rescueSection, dismissSection, godSection, birthSection, questSection, upgradeSection]) section.open = false;
   }
   updateOptions();
-  if (running && task?.stopRequested) status.textContent = '正在关闭托管…';
-  else {
-    status.textContent = task?.message ?? '尚未开启托管。';
-    if (running && task.nextAt) status.textContent += ` 下次检查倒计时：${Math.max(0, Math.ceil((task.nextAt - Date.now()) / 1000))} 秒。`;
+  status.textContent = running && task?.stopRequested ? '正在关闭托管…' : task?.message ?? '尚未开启托管。';
+  const records = [...(task?.parentReturns ?? []), ...(task?.incidentSnapshot ?? [])].filter(entry => entry.status === 'waiting');
+  returnParents.disabled = !running || !(task?.parentReturns?.length);
+  const recordList = document.querySelector('#return-records');
+  recordList.replaceChildren();
+  for (const entry of records) {
+    const item = document.createElement('li');
+    item.textContent = `${entry.name} → ${entry.originalRoomId === null ? '门外' : `原房间 ${entry.originalRoomId}`}：${entry.note || '等待归岗，原位名额保留'}`;
+    recordList.append(item);
   }
+  if (!running && records.length) status.textContent += ' 归岗记录保留；重新开启托管后继续恢复。';
+  if (running && task.nextAt && !task.stopRequested) status.textContent += ` 下次检查倒计时：${Math.max(0, Math.ceil((task.nextAt - Date.now()) / 1000))} 秒。`;
   const { shelterLogs = [], shelterLogStatus } = await chrome.storage.local.get(['shelterLogs', 'shelterLogStatus']);
   const source = shelterLogs.length ? shelterLogs.slice(-logLimit) : task?.logs ?? [];
   // 日志没变化时不再拼接和重写整个 textarea；否则面板每秒都要处理几十万字符。
@@ -312,9 +347,9 @@ settings.addEventListener('submit', async event => {
       chrome.runtime.sendMessage({ type: 'fengbao-shelter-log-watch', tabId, running: false }).catch(() => {});
     } else {
       await savedSettings.save();
-      chrome.storage.local.set({ shelterUpgradeOrder: upgradeOrder }).catch(() => {});
+      await chrome.storage.local.set({ shelterUpgradeOrder: upgradeOrder });
       await chrome.scripting.executeScript({ target: { tabId }, files: ['stewardship/upgrade-plan.js', 'workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'] });
-      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, upgrade, upgradeDig, upgradeOrderArg, craftOutfits) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, upgrade, upgradeDig, upgradeOrderArg, craftOutfits); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder, upgradeEnabled.checked && upgradeCraftEnabled.checked] });
+      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, trainingOptions(), upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder, upgradeEnabled.checked && upgradeCraftEnabled.checked] });
       chrome.runtime.sendMessage({ type: 'fengbao-shelter-log-watch', tabId, running: true }).catch(() => {});
     }
     await refresh();

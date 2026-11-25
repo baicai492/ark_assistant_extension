@@ -8,18 +8,40 @@
 </head>
 <body>
   <h1>一键安排</h1>
-  <p class="note">安排期间请勿手动调动居民或编辑房间。房间规划等待确认时，关闭面板不会执行，重开后可确认或取消；已确认的任务关闭面板后仍会继续。</p>
+  <label for="strategy">安排策略<select id="strategy"><option value="production">产出优先（推荐）</option><option value="highest">最高基础属性优先</option></select></label>
+  <p id="strategy-note" class="note">综合服装、等级、当前心情和房间等级匹配生产岗位，再比较电台带来的长期心情收益与稳定产出；优先减少电、粮、水及废料亏损。人手或房间不足时仍可能亏损。</p>
+  <fieldset>
+    <legend>安排范围</legend>
+    <label><input id="reassign-training" type="checkbox">重新安排训练室中的居民</label>
+    <p class="hint">关闭：保留原训练安排。开启：训练室中的可调成人一起参与生产和训练分配。</p>
+  </fieldset>
+  <fieldset id="training-settings">
+    <legend>训练安排</legend>
+    <label><input id="train-charisma" type="checkbox">允许安排魅力训练</label>
+    <label><input id="train-luck" type="checkbox">允许安排幸运训练</label>
+    <p class="hint">默认优先生产相关属性，不新增魅力、幸运训练。</p>
+  </fieldset>
+  <p class="note">保留儿童、外出、倒下、事件房间居民、正在制作装备的工坊居民，以及未处于家庭冷却的宿舍居民。白天保留大门守卫；00:00–07:59 掠夺者不进大门，大门居民可参与生产，08:00 起恢复守卫；托管在午夜让未完成的大门救援先回原岗，08:00 再由同一居民重救，已回岗记录不阻塞居民或房间安排。跳过升级、施工、停电和事故中的房间，提交前再次检查状态；不会自动更换装备。</p>
+  <p class="note">临时配对挂载期间，配对居民、宿舍暂移居民及其原岗位名额保留，不参与本次重排。</p>
   <details>
-    <summary>房间整理排序（点击展开调整）<button class="help-button" type="button" aria-label="房间排序调整说明" title="按住右侧三横线手柄上下拖动调整，从上到下、从左到右按此顺序整理；同类房间仍优先高等级。排序自动保存在本扩展中。">?</button></summary>
+    <summary>房间整理排序（拖动手柄调整，自动保存）</summary>
     <ol id="room-order"></ol>
   </details>
   <div class="actions">
-    <div class="action-with-help"><button id="start" disabled>一键安排居民</button><button class="help-button" type="button" aria-label="居民安排规则" title="宿舍中处于家庭冷却的成人参与安排，其余宿舍居民及训练室所有居民保留。儿童、外出或已倒下的居民不调动。&#10;&#10;只比较力、感、耐、魅、智、敏六项基础属性。唯一最高者先安排，并列最高者补空位或替换低属性居民；同类房间优先高等级、大容量。智力优先零件工坊，再安排医务室，魅力安排电台。&#10;&#10;剩余居民进入最高属性对应的训练室；最高属性已达 10 时，选择其他有空位且对应属性未满的训练室（包含幸运）。无合适训练空位时补生产空位，资源缺口优先、基础属性匹配其次，导致废料亏损的工坊最后补；生产房全满才移到门外。排除升级、施工及停产房间。&#10;&#10;按最高属性优先分配，不保障资源收支。完成后显示预计净产出，废料扣除零件工坊消耗；出现亏损时提示手动调整，不自动改派。">?</button></div>
-    <div class="action-with-help"><button id="organize" disabled>一键整理房间</button><button class="help-button" type="button" aria-label="房间整理规则" title="默认顺序：生产房 → 训练室、电台、武器/服装工坊 → 宿舍 → 仓库，可在上方调整。先拆成单格，利用至少 1 格空位移动，同类到位后恢复自动合并。有施工、升级、事件或制作时退出；先展示完整规划，确认后执行。">?</button></div>
+    <button id="start" disabled>一键安排居民</button>
+    <button id="organize" disabled>一键整理房间</button>
   </div>
+  <button id="stop" disabled>停止居民安排</button>
+  <p class="note">整理顺序：生产房 → 训练室、电台、武器/服装工坊 → 宿舍 → 仓库（最下层）。先拆成单格，利用至少 1 格空位移动，同类到位后恢复自动合并。有施工、升级、事件或制作时退出；先展示完整规划，确认后执行。</p>
   <p id="status" role="status" aria-live="polite">正在连接页面…</p>
   <p id="rates" hidden></p>
+  <p id="long-term-rates" hidden></p>
+  <p id="guard-status" class="note" hidden></p>
   <ul id="rooms"></ul>
+  <details id="unavailable-rooms" hidden>
+    <summary id="unavailable-room-count"></summary>
+    <ul id="unavailable-room-list"></ul>
+  </details>
   <section id="room-confirmation" hidden>
     <p class="note">请核对上方规划。确认后开始拆分、移动和合并，中途停止不会自动撤销，可能保留已拆分的单格房间；取消不改变房间。</p>
     <div class="actions">
@@ -31,6 +53,7 @@
     <summary id="excluded-count"></summary>
     <ul id="excluded-list"></ul>
   </details>
+  <p class="note">安排期间请勿手动调动居民或编辑房间。房间规划等待确认时，关闭面板不会执行，重开后可确认或取消；已确认的任务关闭面板后仍会继续。</p>
   <script src="room-planner.js"></script>
   <script src="popup.js"></script>
 </body>

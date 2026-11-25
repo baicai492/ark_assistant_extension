@@ -1,17 +1,18 @@
 // 自动升级与挖层只做规划和费用计算，不直接发出游戏操作。
 // 按用户调整后的房间类型顺序排序，同类型先升低等级（1 级 → 2 级，再 2 级 → 3 级）。
-const shelterUpgradeGroups = [
+// 面板每次启动都会重新注入，var 允许在同一隔离环境中再次加载。
+var shelterUpgradeGroups = [
   'power', 'scrap', 'workshop', 'diner', 'water',
   'quarters', 'storage', 'training', 'armory', 'tailor', 'door',
   'medbay', 'radio'
 ];
-const shelterUpgradeLabels = {
+var shelterUpgradeLabels = {
   power: '发电站', scrap: '废料回收站', workshop: '零件工坊', diner: '餐厅', water: '净水站',
   quarters: '宿舍', storage: '仓库', training: '训练室', armory: '武器工坊', tailor: '服装工坊', door: '大门',
   medbay: '医务室', radio: '电台'
 };
 // 游戏房间的基础造价；大门升级固定按 400 计算，电梯不能升级。
-const shelterUpgradeBaseCost = {
+var shelterUpgradeBaseCost = {
   door: 400, power: 100, diner: 100, water: 100, scrap: 80, quarters: 120,
   storage: 80, medbay: 300, training: 400, workshop: 500, armory: 600, tailor: 600, radio: 800
 };
