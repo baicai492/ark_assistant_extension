@@ -1,4 +1,4 @@
-function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled = false, dismissStatKey = 'end', dismissStat = 4, rescueCount = 1, rescueEnabled = true, rescueMode = 'auto', godEnabled = false, birthEnabled = false, questEnabled = false, trainingOptions = {}, upgradeEnabled = false, upgradeDigEnabled = false, upgradeOrder = [], craftOutfitsEnabled = false, targetEnabled = false, targetRoom = '', targetCount = 0, targetStat = 'str', populationOptions = {}) {
+function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled = false, dismissStatKey = 'end', dismissStat = 4, rescueCount = 1, rescueEnabled = true, rescueMode = 'auto', godEnabled = false, birthEnabled = false, questEnabled = false, trainingOptions = {}, upgradeEnabled = false, upgradeDigEnabled = false, upgradeOrder = [], craftOutfitsEnabled = false, targetEnabled = false, targetRoom = '', targetCount = 0, targetStat = 'str', populationOptions = {}, targetProgress = null) {
   const previous = globalThis.__fengbaoShelterAuto;
   if (previous?.running) return;
   if (globalThis.__fengbaoWorkAssignment?.running || globalThis.__fengbaoDormAssignment?.running ||
@@ -34,7 +34,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   const outfitCraftMaxTier = room => Math.min(6, 2 * (Number(room.level) || 0));
   if (dismissStatEnabled && !Object.hasOwn(statLabels, dismissStatKey)) throw new Error('请选择单项遣散的指定属性');
   if (dismissStatEnabled && (!Number.isInteger(dismissStat) || dismissStat < 1 || dismissStat > 10)) throw new Error('单项属性遣散阈值必须为 1–10 的整数');
-  const task = { running: true, cycleRunning: true, trainingOptions, parentReturns: previous?.parentReturns ?? [], stopRequested: false, intervalSeconds, rescueEnabled, rescueMode, rescueCount, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, godEnabled, birthEnabled: Boolean(birthEnabled), questEnabled: Boolean(questEnabled), upgradeEnabled: Boolean(upgradeEnabled), upgradeDigEnabled: Boolean(upgradeDigEnabled), craftOutfitsEnabled: Boolean(craftOutfitsEnabled), targetEnabled: Boolean(targetEnabled), targetRoom: String(targetRoom || ''), targetCount: Number(targetCount) || 0, targetStat: ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'].includes(targetStat) ? targetStat : 'str', targetProgress: previous?.targetProgress ?? null, targetBlockedUntil: previous?.targetBlockedUntil ?? 0, targetBlockedReason: previous?.targetBlockedReason ?? '', upgradeOrder: typeof normalizeShelterUpgradeOrder === 'function' ? normalizeShelterUpgradeOrder(upgradeOrder) : [], upgradeBlocked: previous?.upgradeBlocked ?? {}, upgradingRooms: previous?.upgradingRooms ?? {}, craftBlocked: previous?.craftBlocked ?? {}, lastDigFloor: previous?.lastDigFloor ?? null, logs: previous?.logs ?? [], message: '正在开启托管…', nextAt: null, pendingDispatch: previous?.pendingDispatch ?? {}, newcomers: previous?.newcomers ?? [], knownIds: previous?.knownIds ?? null, deployments: previous?.deployments ?? {}, autoParents: previous?.autoParents ?? [], autoAssigned: previous?.autoAssigned ?? [], autoPairs: previous?.autoPairs ?? [], pairAttempts: previous?.pairAttempts ?? {}, pairFailedUntil: previous?.pairFailedUntil ?? {}, recentEvictions: previous?.recentEvictions ?? {}, pairLogAt: previous?.pairLogAt ?? {}, evictCounts: previous?.evictCounts ?? {}, evictHoldUntil: previous?.evictHoldUntil ?? {}, recentMoves: previous?.recentMoves ?? {}, pendingWorkBlocked: previous?.pendingWorkBlocked ?? {}, pendingWorkDone: previous?.pendingWorkDone ?? {}, dormWorkHold: previous?.dormWorkHold ?? {}, reuniteAt: previous?.reuniteAt ?? {}, gateHold: previous?.gateHold ?? {}, questRetries: previous?.questRetries ?? {}, questWeek: previous?.questWeek ?? null, questDone: previous?.questDone ?? [], questStartBlocked: previous?.questStartBlocked ?? {}, questLogAt: previous?.questLogAt ?? {}, questDoneNotice: previous?.questDoneNotice ?? false };
+  const task = { running: true, cycleRunning: true, trainingOptions, parentReturns: previous?.parentReturns ?? [], stopRequested: false, intervalSeconds, rescueEnabled, rescueMode, rescueCount, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, godEnabled, birthEnabled: Boolean(birthEnabled), questEnabled: Boolean(questEnabled), upgradeEnabled: Boolean(upgradeEnabled), upgradeDigEnabled: Boolean(upgradeDigEnabled), craftOutfitsEnabled: Boolean(craftOutfitsEnabled), targetEnabled: Boolean(targetEnabled), targetRoom: String(targetRoom || ''), targetCount: Number(targetCount) || 0, targetStat: ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'].includes(targetStat) ? targetStat : 'str', targetProgress: previous?.targetProgress ?? targetProgress ?? null, targetBlockedUntil: previous?.targetBlockedUntil ?? 0, targetBlockedReason: previous?.targetBlockedReason ?? '', upgradeOrder: typeof normalizeShelterUpgradeOrder === 'function' ? normalizeShelterUpgradeOrder(upgradeOrder) : [], upgradeBlocked: previous?.upgradeBlocked ?? {}, upgradingRooms: previous?.upgradingRooms ?? {}, craftBlocked: previous?.craftBlocked ?? {}, lastDigFloor: previous?.lastDigFloor ?? null, logs: previous?.logs ?? [], message: '正在开启托管…', nextAt: null, pendingDispatch: previous?.pendingDispatch ?? {}, newcomers: previous?.newcomers ?? [], knownIds: previous?.knownIds ?? null, deployments: previous?.deployments ?? {}, autoParents: previous?.autoParents ?? [], autoAssigned: previous?.autoAssigned ?? [], autoPairs: previous?.autoPairs ?? [], pairAttempts: previous?.pairAttempts ?? {}, pairFailedUntil: previous?.pairFailedUntil ?? {}, recentEvictions: previous?.recentEvictions ?? {}, pairLogAt: previous?.pairLogAt ?? {}, evictCounts: previous?.evictCounts ?? {}, evictHoldUntil: previous?.evictHoldUntil ?? {}, recentMoves: previous?.recentMoves ?? {}, pendingWorkBlocked: previous?.pendingWorkBlocked ?? {}, pendingWorkDone: previous?.pendingWorkDone ?? {}, dormWorkHold: previous?.dormWorkHold ?? {}, reuniteAt: previous?.reuniteAt ?? {}, gateHold: previous?.gateHold ?? {}, questRetries: previous?.questRetries ?? {}, questWeek: previous?.questWeek ?? null, questDone: previous?.questDone ?? [], questStartBlocked: previous?.questStartBlocked ?? {}, questLogAt: previous?.questLogAt ?? {}, questDoneNotice: previous?.questDoneNotice ?? false };
   // 游戏每 10 分钟结算一次感情，临时配对至少要撑过一次结算；2 分钟太短，
   // 服务端换房后扩展会提前放弃，随后又把两人搬回宿舍，造成来回切换。
   const pairGraceMs = 12 * 60000;
@@ -115,6 +115,17 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     } else {
       // 兼容无法访问存储 API 的注入环境：交给页面里的日志桥接脚本。
       try { globalThis.window?.postMessage({ src: 'fengbao-shelter-log', type: 'log', line }, globalThis.location?.origin ?? '*'); } catch {}
+    }
+  };
+  // 目标进度同时写入扩展存储；注入环境拿不到 storage API 时交给日志桥接保存。
+  const saveTargetProgress = async progress => {
+    if (!progress) return;
+    let saved = false;
+    if (logStorage) {
+      try { await logStorage.set({ shelterTargetProgress: progress }); saved = true; } catch {}
+    }
+    if (!saved) {
+      try { globalThis.window?.postMessage({ src: 'fengbao-shelter-log', type: 'target-progress', progress }, globalThis.location?.origin ?? '*'); } catch {}
     }
   };
   // “暂无空位、原地等待”这类状态每 30 秒都会重复出现；按居民节流，
@@ -1265,9 +1276,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       }
       progress = { room, trainStat, startFloor };
       task.targetProgress = progress;
-      if (logStorage) {
-        try { await logStorage.set({ shelterTargetProgress: progress }); } catch {}
-      }
+      await saveTargetProgress(progress);
       log(`目标建造：从第 ${startFloor} 层开始建 ${count} 格${shelterUpgradeLabels[room] ?? room}。`);
     }
     const options = { room, count, trainStat, startFloor: progress.startFloor };
@@ -1333,6 +1342,18 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     }
     return true;
   }
+  // 目标开启且未完成时，即使调用方传入的 targetActive 失真，也不开始普通房间升级。
+  function targetIncomplete() {
+    if (!task.targetEnabled) return false;
+    const room = task.targetRoom;
+    const count = Math.max(0, Math.floor(Number(task.targetCount) || 0));
+    if (!room || count < 1 || !shelterTargetBuildable.includes(room)) return false;
+    const trainStat = room === 'training' ? task.targetStat : null;
+    const progress = task.targetProgress;
+    if (!progress || progress.room !== room || (progress.trainStat ?? null) !== trainStat) return true;
+    const status = shelterTargetStatus(view, { room, count, trainStat, startFloor: progress.startFloor });
+    return !status.complete;
+  }
   // 自动升级与挖层：按面板顺序升级房间，同类先升低等级；有人工作的房间也升级，居民留在原房间。
   // 没有正在挖掘时顺带开始下一层。
   // 升级和挖层都只发普通动作，绝不使用星核汽水加速。每次检查最多开始一间升级，避免同时停掉多间生产。
@@ -1383,7 +1404,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       await autoCraftOutfits();
       if (stopped()) return;
     }
-    if (targetActive) return;
+    const targetPending = targetIncomplete();
+    if (targetActive || targetPending) {
+      if (targetPending) logQuiet('upgrade:target-wait', '自动升级：目标建造未完成，暂停普通升级。', 30 * 60000);
+      return;
+    }
     // 游戏最多同时 2 间房间施工，挖层不占施工位。空位不足时只等待，
     // 不能继续逐间尝试，否则每间都会收到“同时最多 2 项施工”并被误封 30 分钟。
     const active = activeConstructionCount();
@@ -2326,12 +2351,13 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     try {
       if (location.origin !== 'https://game.arkengine.me' || !/^\/shelter\/?$/.test(location.pathname)) throw new Error('请在自己的避难所页面开启');
       if (globalThis.__fengbaoWorkAssignment?.running || globalThis.__fengbaoDormAssignment?.running || globalThis.__fengbaoEquipmentAssignment?.running || globalThis.__fengbaoResidentRename?.running) throw new Error('其他居民任务正在运行，请等待完成');
-      if (task.targetEnabled && logStorage) {
+      if (task.targetEnabled && logStorage && !task.targetProgress) {
         try {
           const stored = await logStorage.get('shelterTargetProgress');
           if (stored?.shelterTargetProgress) task.targetProgress = stored.shelterTargetProgress;
         } catch {}
       }
+      if (task.targetProgress) await saveTargetProgress(task.targetProgress);
       let greeted = false, roundError = false, consecutiveErrors = 0;
       while (!stopped()) {
         if (globalThis.__fengbaoDormAssignment?.running || globalThis.__fengbaoWorkAssignment?.running || globalThis.__fengbaoEquipmentAssignment?.running || globalThis.__fengbaoResidentRename?.running) {

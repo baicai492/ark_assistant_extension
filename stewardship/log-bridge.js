@@ -20,7 +20,15 @@
   window.addEventListener('message', event => {
     if (event.source !== window || event.origin !== location.origin) return;
     const data = event.data;
-    if (data?.src !== 'fengbao-shelter-log' || data.type !== 'log' || typeof data.line !== 'string') return;
+    if (data?.src !== 'fengbao-shelter-log') return;
+    // 目标建造进度：注入环境拿不到 storage API 时仍能保存，重启后继续原进度。
+    if (data.type === 'target-progress') {
+      if (data.progress && typeof data.progress === 'object') {
+        chrome.storage.local.set({ shelterTargetProgress: data.progress }).catch(() => {});
+      }
+      return;
+    }
+    if (data.type !== 'log' || typeof data.line !== 'string') return;
     pending.push(data.line);
     if (!timer) timer = setTimeout(flush, 400);
   });
