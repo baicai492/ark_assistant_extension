@@ -534,6 +534,40 @@ test('目标建造独立运行并保留训练属性，事件中继续建造', as
   }
 });
 
+test('目标进度从扩展存储恢复，重启后不从新的空楼层重算', async () => {
+  const progress = { room: 'power', trainStat: null, startFloor: 2 };
+  const state = view([], [room(1, 'elevator', { floor: 1, col: 1 }),
+    room(2, 'elevator', { floor: 2, col: 1 }), room(3, 'power', { floor: 2, col: 2, width: 1 })],
+  { depth: 2, resources: { scrap: 10000 } });
+  const storage = {
+    async get(keys) {
+      const list = Array.isArray(keys) ? keys : [keys];
+      return Object.fromEntries(list.map(key => [key, key === 'shelterTargetProgress' ? structuredClone(progress) : undefined]));
+    },
+    async set() {}, async remove() {}
+  };
+  const result = await run(state, { target: true, targetRoom: 'power', targetCount: 3, upgrade: true },
+    { globals: { chrome: { storage: { local: storage } } } });
+  assert.equal(result.task.targetProgress.startFloor, 2);
+  const builds = result.actions.filter(action => action.type === 'build');
+  assert.ok(builds.length >= 1);
+  assert.deepEqual([builds[0].floor, builds[0].col], [2, 3]);
+  assert.ok(!result.task.logs.some(line => line.includes('从第 1 层开始')));
+  await result.stop();
+});
+
+test('注入环境没有 storage API 时通过日志桥接保存目标进度', async () => {
+  const messages = [];
+  const state = view([], [room(1, 'elevator', { floor: 1, col: 1 })], { depth: 1, resources: { scrap: 10000 } });
+  const result = await run(state, { target: true, targetRoom: 'storage', targetCount: 2 },
+    { globals: { window: { postMessage: (message, origin) => messages.push({ message, origin }) } } });
+  const saved = messages.map(item => item.message).find(message => message?.type === 'target-progress');
+  assert.ok(saved, '应向日志桥接发送目标进度');
+  assert.deepEqual(plain(saved.progress), { room: 'storage', trainStat: null, startFloor: 1 });
+  assert.ok(messages.every(item => item.origin === 'https://game.arkengine.me'));
+  await result.stop();
+});
+
 test('自动生育保留原生产与训练岗，确认家庭后回原岗，升级原岗等待恢复', async () => {
   const state = view([person(1, { roomId: 1, stats: stats(10) }), person(2, { roomId: 2, stats: stats(10) })],
     [room(1, 'power'), room(2, 'training', { trainStat: 'str' }), room(3, 'quarters')]);
