@@ -12,7 +12,7 @@ panel.addEventListener('load', () => {
 const buttons = [...document.querySelectorAll('nav button')];
 const mode = document.querySelector('#mode');
 // 切换模式时保留本次打开面板中各模式最后查看的功能。
-const selectedModules = { cultivation: 'encounter', shelter: 'pairing' };
+const selectedModules = { cultivation: 'encounter', shelter: 'stewardship' };
 function selectModule(name) {
   const selectedMode = buttons.find(button => button.dataset.module === name).closest('nav').dataset.mode;
   mode.value = selectedMode;
@@ -30,7 +30,7 @@ mode.addEventListener('change', () => selectModule(selectedModules[mode.value]))
 async function initialize() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const path = tab.url ? new URL(tab.url).pathname : '';
-  const name = /^\/shelter\/?$/.test(path) ? 'pairing' :
+  const name = /^\/shelter\/?$/.test(path) ? 'stewardship' :
     /^\/cultivate\/fog\/?$/.test(path) ? 'fog' :
     /^\/activities\/expedition\/?$/.test(path) ? 'expedition' :
     /^\/cultivate\/?$/.test(path) ? 'encounter' : 'overload';
