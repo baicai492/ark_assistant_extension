@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>一键分配装备</title>
+  <link rel="stylesheet" href="../module.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>一键分配装备</h1>
+  <p class="note">统筹仓库和在家成人已穿戴的装备。儿童、外出、已倒下及事件房间中的居民连同装备一起保留。</p>
+  <form id="settings">
+    <label><input id="weapons" type="checkbox" checked>分配武器</label>
+    <p class="hint">强武器优先分给大门守卫，其余按含服装加成、未计武器的战力从高到低分配；相同伤害尽量保留原武器。</p>
+    <label><input id="outfits" type="checkbox" checked>分配服装</label>
+    <p class="hint">优先提高生产岗位对应属性：发电力、餐厅敏、净水感、废料耐、医务和零件工坊智。其后比较战斗属性与总加成，同分保留原穿戴。</p>
+    <p class="note">训练、招募和感情速度只按基础属性计算，不为这些岗位专配服装。装备不足时按上述规则分配剩余装备。</p>
+    <div class="actions">
+      <button id="start" type="submit" disabled>一键分配装备</button>
+      <button id="stop" type="button" disabled>停止</button>
+    </div>
+  </form>
+  <p id="status" role="status" aria-live="polite">正在连接页面…</p>
+  <details id="results" hidden>
+    <summary id="result-count"></summary>
+    <ul id="result-list"></ul>
+  </details>
+  <details id="excluded" hidden>
+    <summary id="excluded-count"></summary>
+    <ul id="excluded-list"></ul>
+  </details>
+  <p class="note">分配期间请勿手动穿戴装备或调动居民。关闭面板后继续执行，刷新游戏页面会中断；停止会保留已完成的穿戴。</p>
+  <script src="popup.js"></script>
+</body>
+</html>

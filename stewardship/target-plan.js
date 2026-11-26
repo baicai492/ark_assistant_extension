@@ -1,7 +1,7 @@
 // 目标建造规划：从最早只有电梯的空楼层开始，按游戏建造面板的规则连续建格。
 // 只做规划和费用计算，不直接发出游戏操作。
-const shelterTargetBuildable = Object.keys(shelterUpgradeBaseCost).filter(type => type !== 'door');
-const shelterTargetTrainStats = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'];
+var shelterTargetBuildable = Object.keys(shelterUpgradeBaseCost).filter(type => type !== 'door');
+var shelterTargetTrainStats = ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'];
 
 function shelterTargetNormalizeTrainStat(value) {
   return shelterTargetTrainStats.includes(value) ? value : 'str';

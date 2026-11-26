@@ -23,6 +23,7 @@ async function stopShelterLog(tabId) {
 async function sendShelterLogs(logs) {
   try {
     const response = await chrome.runtime.sendNativeMessage(shelterLogHost, { command: 'log', logs });
+    if (response?.error || response?.ok !== true) throw new Error(response?.error || '本地日志程序未确认写入');
     await chrome.storage.local.set({ shelterLogStatus: { ok: true, file: response?.file ?? '', at: Date.now() } });
   } catch (error) {
     try {
@@ -34,6 +35,7 @@ async function sendShelterLogs(logs) {
 async function clearShelterLogs() {
   try {
     const response = await chrome.runtime.sendNativeMessage(shelterLogHost, { command: 'clear' });
+    if (response?.error || response?.ok !== true) throw new Error(response?.error || '本地日志程序未确认清空');
     await chrome.storage.local.set({ shelterLogStatus: { ok: true, file: response?.file ?? '', at: Date.now() } });
   } catch (error) {
     try {

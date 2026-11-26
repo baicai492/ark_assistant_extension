@@ -14,6 +14,7 @@
     <button type="button" data-view="combatPower" aria-pressed="false" disabled>战斗力排序 ↓</button>
   </div>
   <div class="actions">
+    <button type="button" data-view="distribution" aria-pressed="false" disabled>属性分布</button>
     <button type="button" data-view="romances" aria-pressed="false" disabled>感情进度</button>
     <button type="button" data-view="children" aria-pressed="false" disabled>儿童成长</button>
   </div>
@@ -25,7 +26,38 @@
   <section id="result" aria-labelledby="result-title" hidden>
     <p><strong id="result-title"></strong><button id="training-note" class="help-button" type="button" aria-label="训练进度说明" title="这里只展示当前训练室内的居民（含暂停、练满）。居民离开训练室后，游戏详情不显示训练进度，但不代表进度清零；离开后返回原训练室可保留进度，其他岗位居民进入训练室也可能显示已有进度。尚未确认进度是否按属性分别保存。" hidden>?</button></p>
     <ol id="residents"></ol>
+    <div id="distribution" hidden>
+      <label for="distribution-scope">统计范围<select id="distribution-scope">
+        <option value="living">全部存活居民</option>
+        <option value="adults">仅存活成人</option>
+        <option value="idle">在家待岗成人</option>
+      </select></label>
+      <p class="note">基础属性，不含装备。全部范围包含儿童与外出者，不含倒下及未出生者。待岗指成年、在家、无房间；此统计不判断是否可遣散。</p>
+      <p id="distribution-census" class="note"></p>
+      <p id="distribution-summary"></p>
+      <p id="distribution-low-count"></p>
+      <label for="distribution-group">总属性分布<select id="distribution-group">
+        <option value="groups">按分段</option>
+        <option value="exact">按每分（有居民的分值）</option>
+      </select></label>
+      <div id="distribution-total-chart" class="distribution-chart" role="list" aria-label="基础总属性人数及占比"></div>
+      <label for="distribution-stat">单项属性分布<select id="distribution-stat">
+        <option value="0">力量</option><option value="1">感知</option><option value="2">耐力</option>
+        <option value="3">魅力</option><option value="4">智力</option><option value="5">敏捷</option><option value="6">幸运</option>
+      </select></label>
+      <div id="distribution-stat-chart" class="distribution-chart" role="list" aria-label="单项基础属性人数及占比"></div>
+      <table class="distribution-table">
+        <caption>七项基础属性概况</caption>
+        <thead><tr><th scope="col">属性</th><th scope="col">均值</th><th scope="col">中位数</th><th scope="col">范围</th><th scope="col">满10</th></tr></thead>
+        <tbody id="distribution-stat-summary"></tbody>
+      </table>
+      <details>
+        <summary id="distribution-low-title">低于 60 分的居民</summary>
+        <ol id="distribution-low-list"></ol>
+      </details>
+    </div>
   </section>
+  <script src="distribution.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

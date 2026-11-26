@@ -13,6 +13,8 @@ p { margin: 8px 0; }
 .stats { display: flex; flex-wrap: wrap; gap: 3px 10px; margin-top: 4px; color: #66738a; font-size: 12px; }
 details { margin-top: 12px; border-top: 1px solid #e5e9f1; padding-top: 8px; }
 summary { cursor: pointer; color: #69548f; }
-#excluded-list { margin: 8px 0 0; padding-left: 18px; color: #66738a; font-size: 12px; }
-#excluded-list li { margin: 5px 0; overflow-wrap: anywhere; }
+#excluded-list, #unavailable-room-list { margin: 8px 0 0; padding-left: 18px; color: #66738a; font-size: 12px; }
+#excluded-list li, #unavailable-room-list li { margin: 5px 0; overflow-wrap: anywhere; }
 summary:focus-visible { outline: 2px solid #8873c5; outline-offset: 2px; }
+#return-records { padding-left: 18px; color: #66738a; font-size: 12px; overflow-wrap: anywhere; }
+#return-now { background: #edf0f6; color: #53617a; }

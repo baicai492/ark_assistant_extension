@@ -1,6 +1,6 @@
 function runShelterIncidents(options = {}) {
   if (!options.managed && globalThis.__fengbaoShelterAuto?.running) return;
-  if (globalThis.__fengbaoWorkAssignment?.running) return;
+  if (globalThis.__fengbaoWorkAssignment?.running || globalThis.__fengbaoEquipmentAssignment?.running) return;
   // 与生产安排共用任务状态，避免同时调动；关闭面板后本批次继续执行。
   const task = { running: true, message: '正在检查全部房间和大门的事件…', moved: 0, rooms: [], excluded: [], rates: null };
   globalThis.__fengbaoWorkAssignment = task;
@@ -23,10 +23,12 @@ function runShelterIncidents(options = {}) {
       if (view.switches?.frozen) throw new Error('避难所正在维护，暂时不能调动');
 
       // 完整接口包含大门及所有楼层，不依赖页面当前可见的房间。
-      const incidents = view.state.rooms.filter(room => room.incident && Object.hasOwn(labels, room.incident.kind))
+      // 00:00–07:59 的大门掠夺者进度冻结，留给托管在 08:00 由原救援者处理。
+      const incidents = view.state.rooms.filter(room => room.incident && Object.hasOwn(labels, room.incident.kind) &&
+        !(room.type === 'door' && room.incident.kind === 'raiders' && new Date(view.serverTime).getHours() < 8))
         .sort((left, right) => left.floor - right.floor || left.col - right.col || left.id - right.id);
       if (!incidents.length) {
-        task.message = '已检查全部房间（含大门），没有着火、变异鼠、漏水或掠夺者事件，无需调动。';
+        task.message = '已检查全部房间（含大门），没有需要立即处理的着火、变异鼠、漏水或掠夺者事件；夜间大门掠夺者会留到 08:00。';
         // 托管的无事件检查不触发手动快照确认。
         if (options.managed) return task;
         // 交给扩展面板二次确认，游戏页面不直接弹窗。
