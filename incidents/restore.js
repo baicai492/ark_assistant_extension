@@ -1,12 +1,12 @@
 function restoreShelterPositions(options = {}) {
   if (!options.managed && globalThis.__fengbaoShelterAuto?.running) return;
-  if (globalThis.__fengbaoWorkAssignment?.running) return;
+  if (globalThis.__fengbaoWorkAssignment?.running || globalThis.__fengbaoEquipmentAssignment?.running) return;
   const task = { running: true, message: '正在按快照恢复居民位置…', moved: 0, rooms: [], excluded: [], rates: null };
   globalThis.__fengbaoWorkAssignment = task;
   return (async () => {
     try {
       if (location.origin !== 'https://game.arkengine.me' || !/^\/shelter\/?$/.test(location.pathname)) throw new Error('请在自己的避难所页面使用');
-      if (globalThis.__fengbaoDormAssignment?.running) throw new Error('宿舍安排正在执行，请等待完成');
+      if (globalThis.__fengbaoDormAssignment?.running || globalThis.__fengbaoDormAssignment?.monitoring) throw new Error('宿舍安排或配对挂载中，请先完成归岗');
       const snapshot = globalThis.__fengbaoIncidentSnapshot;
       if (!snapshot) throw new Error('没有可恢复的位置快照');
       const response = await fetch('/api/shelter', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15000) });

@@ -7,29 +7,67 @@ const pairList = document.querySelector('#pairs');
 const excluded = document.querySelector('#excluded');
 const excludedList = document.querySelector('#excluded-list');
 const assignDorms = document.querySelector('#assign-dorms');
+const returnToWork = document.querySelector('#return-to-work');
+const returnNow = document.querySelector('#return-now');
 const labels = ['力', '感', '耐', '魅', '智', '敏', '幸'];
 let tabId;
 let recommendedPairs = [];
+let mounted = false, polling, submitting = false;
+try { returnToWork.checked = localStorage.getItem('fengbao-pairing-return') !== 'false'; } catch { /* 使用默认值。 */ }
+returnToWork.addEventListener('change', () => {
+  try { localStorage.setItem('fengbao-pairing-return', String(returnToWork.checked)); } catch { /* 不影响本次安排。 */ }
+});
 
 function setBusy(busy) {
   calculate.disabled = busy;
   groupCount.disabled = busy;
-  assignDorms.disabled = busy || recommendedPairs.length === 0;
+  assignDorms.disabled = busy || mounted || recommendedPairs.length === 0;
+  returnToWork.disabled = busy || mounted;
 }
 
 async function refreshAssignment() {
+  clearTimeout(polling);
   const [injection] = await chrome.scripting.executeScript({
-    target: { tabId }, func: () => globalThis.__fengbaoDormAssignment ?? null
+    target: { tabId }, func: () => {
+      const task = globalThis.__fengbaoDormAssignment;
+      return task ? { running: task.running, monitoring: task.monitoring, returnRequested: task.returnRequested,
+        returnToWork: task.returnToWork, message: task.message, completed: task.completed, entries: task.entries,
+        issues: task.issues, unavailableRooms: task.unavailableRooms } : null;
+    }
   });
   const task = injection.result;
   if (!task) return false;
-  status.textContent = [task.message, ...task.completed].join('\n');
-  setBusy(task.running);
-  if (task.running) setTimeout(() => refreshAssignment().catch(showAssignmentError), 750);
+  mounted = Boolean(task.monitoring);
+  status.textContent = [task.message, ...(task.completed ?? []), ...(task.issues ?? [])].join('\n');
+  setBusy(task.running || mounted || submitting);
+  returnNow.disabled = Boolean(!mounted || task.running || task.returnRequested);
+  returnNow.textContent = task.returnRequested && mounted ? '正在等待归岗…' : '结束挂载并归岗';
+  if (task.running || mounted) returnToWork.checked = task.returnToWork;
+  const records = document.querySelector('#return-records');
+  records.replaceChildren();
+  for (const entry of task.entries ?? []) {
+    const item = document.createElement('li');
+    item.textContent = `${entry.name} → ${entry.originalLabel}：${entry.status === 'returned' ? '已归岗' : entry.status === 'released' ? '已另行安排' : entry.note || '等待归岗'}`;
+    records.append(item);
+  }
+  const unavailable = task.unavailableRooms ?? [];
+  document.querySelector('#unavailable-rooms').hidden = !unavailable.length;
+  document.querySelector('#unavailable-room-count').textContent = `不可用宿舍 ${unavailable.length} 间 · 查看状态标签`;
+  const roomList = document.querySelector('#unavailable-room-list');
+  roomList.replaceChildren();
+  for (const room of unavailable) {
+    const item = document.createElement('li');
+    item.textContent = `${room.label}：${room.reasons.join('、')}`;
+    roomList.append(item);
+  }
+  if (task.running || mounted) polling = setTimeout(() => refreshAssignment().catch(showAssignmentError), 750);
   return true;
 }
 
 function showAssignmentError(error) {
+  clearTimeout(polling);
+  setBusy(true);
+  returnNow.disabled = true;
   status.textContent = `无法读取安排状态：${error.message}。请重新打开面板查看，或检查游戏页面。`;
 }
 
@@ -137,9 +175,12 @@ async function calculateResidents(requestedGroups) {
 
 settings.addEventListener('submit', event => {
   event.preventDefault();
+  if (calculate.disabled) return;
   calculateResidents(groupCount.valueAsNumber);
 });
 assignDorms.addEventListener('click', async () => {
+  if (assignDorms.disabled || submitting) return;
+  submitting = true;
   setBusy(true);
   status.textContent = '正在安排宿舍…';
   try {
@@ -149,14 +190,27 @@ assignDorms.addEventListener('click', async () => {
       setBusy(false);
       return;
     }
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['pairing/resident-state.js', 'pairing/skip-unavailable.js'] });
-    await chrome.scripting.executeScript({ target: { tabId }, func: startDormAssignment, args: [recommendedPairs] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['pairing/resident-state.js', 'pairing/skip-unavailable.js', 'pairing/assign.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, func: (pairs, options) => { void startDormAssignment(pairs, options); },
+      args: [recommendedPairs, { returnToWork: returnToWork.checked }] });
     // 本批结果执行后失效，必须重新计算才能再发起安排。
     recommendedPairs = [];
+    submitting = false;
     await refreshAssignment();
   } catch (error) {
     showAssignmentError(error);
-  }
+  } finally { submitting = false; }
+});
+returnNow.addEventListener('click', async () => {
+  if (returnNow.disabled) return;
+  returnNow.disabled = true;
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, func: () => {
+      const task = globalThis.__fengbaoDormAssignment;
+      if (task?.monitoring) { task.returnRequested = true; void task.wake?.(); }
+    } });
+    await refreshAssignment();
+  } catch (error) { showAssignmentError(error); }
 });
 
 async function initialize() {
