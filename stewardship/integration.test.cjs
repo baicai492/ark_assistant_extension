@@ -67,7 +67,12 @@ async function run(initial, options = {}, hooks = {}) {
       else if (action.type === 'quest_claim') server.state.quests = server.state.quests.filter(item => item.id !== action.runId);
       else if (action.type === 'rescue_incident') server.state.rooms.find(item => item.id === action.roomId).incident = null;
       else if (action.type === 'upgrade') server.state.rooms.find(item => item.id === action.roomId).upgradeAt = server.serverTime + 3600000;
-      else if (action.type === 'craft') server.state.rooms.find(item => item.id === action.roomId).craft = { tier: action.tier, doneAt: server.serverTime + 3600000 };
+      else if (action.type === 'craft') {
+        server.state.rooms.find(item => item.id === action.roomId).craft = { tier: action.tier, doneAt: server.serverTime + 3600000 };
+        // 与游戏一致：开始制作时扣除废料和零件。
+        server.state.resources.scrap = (Number(server.state.resources.scrap) || 0) - 80 * (action.tier + 1) ** 2;
+        server.state.resources.parts = (Number(server.state.resources.parts) || 0) - 4 * action.tier;
+      }
       else if (action.type === 'dig') server.state.digging = { floor: server.state.depth + 1 };
       else if (action.type === 'build') server.state.rooms.push(room(Math.max(0, ...server.state.rooms.map(item => item.id)) + 1,
         action.room, { floor: action.floor, col: action.col, trainStat: action.trainStat, builtAt: server.serverTime + 3600000 }));
@@ -79,7 +84,8 @@ async function run(initial, options = {}, hooks = {}) {
     options.dismissStat ?? false, options.statKey ?? 'end', options.stat ?? 4, options.rescues ?? 1,
     options.rescue ?? false, options.mode ?? 'auto', options.god ?? false, options.birth ?? false, options.quest ?? false,
     options.training ?? {}, options.upgrade ?? false, options.dig ?? false, options.upgradeOrder ?? [], options.craft ?? false,
-    options.target ?? false, options.targetRoom ?? '', options.targetCount ?? 0, options.targetStat ?? 'str', options.population ?? {});
+    options.target ?? false, options.targetRoom ?? '', options.targetCount ?? 0, options.targetStat ?? 'str', options.population ?? {},
+    options.targetProgress ?? null, options.craftMulti ?? false);
   await settle();
   const task = context.__fengbaoShelterAuto;
   assert.ok(task, '托管任务已创建');
@@ -420,6 +426,78 @@ test('服装图鉴高档集齐后制作下一档，资源不足及停电工坊�
     assert.deepEqual(result.actions.filter(action => action.type === 'craft'), blocked === 'none' ? [{ type: 'craft', roomId: 1, tier: 5 }] : []);
     await result.stop();
   }
+});
+
+test('多工坊同时制作默认关闭时仍只制作一件', async () => {
+  const state = view([person(1, { roomId: 1 }), person(2, { roomId: 2 }), person(3, { roomId: 3 })],
+    [room(1, 'tailor', { level: 3 }), room(2, 'tailor', { level: 3 }), room(3, 'tailor', { level: 3 })],
+    { resources: { scrap: 20000, parts: 200 } });
+  const result = await run(state, { upgrade: true, craft: true });
+  assert.deepEqual(result.actions.filter(action => action.type === 'craft'), [
+    { type: 'craft', roomId: 1, tier: 6 }]);
+  assert.equal(result.actions.filter(action => action.type === 'assign').length, 0);
+  await result.stop();
+});
+
+test('自动造服装让多间有居民的服装工坊同时制作', async () => {
+  const state = view([person(1, { roomId: 1 }), person(2, { roomId: 2 }), person(3, { roomId: 3 })],
+    [room(1, 'tailor', { level: 3 }), room(2, 'tailor', { level: 3 }), room(3, 'tailor', { level: 3 })],
+    { resources: { scrap: 20000, parts: 200 } });
+  const result = await run(state, { upgrade: true, craft: true, craftMulti: true });
+  assert.deepEqual(result.actions.filter(action => action.type === 'craft'), [
+    { type: 'craft', roomId: 1, tier: 6 }, { type: 'craft', roomId: 2, tier: 6 },
+    { type: 'craft', roomId: 3, tier: 6 }]);
+  assert.equal(result.actions.filter(action => action.type === 'assign').length, 0);
+  assert.equal(result.server.state.rooms.filter(room => room.craft).length, 3);
+  await result.stop();
+});
+
+test('自动造服装用一名居民依次给多间空工坊开工', async () => {
+  const state = view([person(1, { roomId: 1 })],
+    [room(1, 'tailor', { level: 3 }), room(2, 'tailor', { level: 3 }), room(3, 'tailor', { level: 3 })],
+    { resources: { scrap: 20000, parts: 200 } });
+  const result = await run(state, { upgrade: true, craft: true, craftMulti: true });
+  assert.deepEqual(result.actions.filter(action => ['assign', 'craft'].includes(action.type))
+    .map(action => [action.type, action.roomId]), [
+      ['craft', 1], ['assign', 2], ['craft', 2], ['assign', 3], ['craft', 3]]);
+  assert.equal(result.server.state.residents[0].roomId, 3);
+  assert.equal(result.server.state.rooms.filter(room => room.craft).length, 3);
+  await result.stop();
+});
+
+test('自动造服装资源只够一件时不调居民也不开第二间', async () => {
+  const state = view([person(1, { roomId: 1 })],
+    [room(1, 'tailor', { level: 3 }), room(2, 'tailor', { level: 3 }), room(3, 'tailor', { level: 3 })],
+    { resources: { scrap: 3920, parts: 24 } });
+  const result = await run(state, { upgrade: true, craft: true, craftMulti: true });
+  assert.deepEqual(result.actions.filter(action => ['assign', 'craft'].includes(action.type)), [
+    { type: 'craft', roomId: 1, tier: 6 }]);
+  assert.equal(result.server.state.residents[0].roomId, 1);
+  await result.stop();
+});
+
+test('已有制作时仍给其他空工坊开工，并让制作中工坊的居民转场', async () => {
+  const state = view([person(1, { roomId: 1 })],
+    [room(1, 'tailor', { level: 3, craft: { tier: 6, doneAt: now + 3600000 } }),
+      room(2, 'tailor', { level: 3 }), room(3, 'tailor', { level: 3 })],
+    { resources: { scrap: 20000, parts: 200 } });
+  const result = await run(state, { upgrade: true, craft: true, craftMulti: true });
+  assert.deepEqual(result.actions.filter(action => ['assign', 'craft'].includes(action.type))
+    .map(action => [action.type, action.roomId]), [
+      ['assign', 2], ['craft', 2], ['assign', 3], ['craft', 3]]);
+  assert.equal(result.server.state.rooms.filter(room => room.craft).length, 3);
+  await result.stop();
+});
+
+test('自动造服装按装备仓库空位限制同时制作，穿戴中的装备不占仓库', async () => {
+  const items = Array.from({ length: 20 }, (_, index) => ({ id: index + 1, slot: 'outfit', tier: 0 }));
+  const state = view([person(1, { roomId: 1, outfitId: 1 }), person(2, { roomId: 2 }), person(3, { roomId: 3 })],
+    [room(1, 'tailor', { level: 3 }), room(2, 'tailor', { level: 3 }), room(3, 'tailor', { level: 3 })],
+    { resources: { scrap: 20000, parts: 200 }, items });
+  const result = await run(state, { upgrade: true, craft: true, craftMulti: true });
+  assert.deepEqual(result.actions.filter(action => action.type === 'craft'), [
+    { type: 'craft', roomId: 1, tier: 6 }]);
+  await result.stop();
 });
 
 test('事件不再阻塞自动升级，事件房间本身不升级', async () => {

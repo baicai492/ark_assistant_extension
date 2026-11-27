@@ -1,4 +1,4 @@
-function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled = false, dismissStatKey = 'end', dismissStat = 4, rescueCount = 1, rescueEnabled = true, rescueMode = 'auto', godEnabled = false, birthEnabled = false, questEnabled = false, trainingOptions = {}, upgradeEnabled = false, upgradeDigEnabled = false, upgradeOrder = [], craftOutfitsEnabled = false, targetEnabled = false, targetRoom = '', targetCount = 0, targetStat = 'str', populationOptions = {}, targetProgress = null) {
+function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled = false, dismissStatKey = 'end', dismissStat = 4, rescueCount = 1, rescueEnabled = true, rescueMode = 'auto', godEnabled = false, birthEnabled = false, questEnabled = false, trainingOptions = {}, upgradeEnabled = false, upgradeDigEnabled = false, upgradeOrder = [], craftOutfitsEnabled = false, targetEnabled = false, targetRoom = '', targetCount = 0, targetStat = 'str', populationOptions = {}, targetProgress = null, craftMultiEnabled = false) {
   const previous = globalThis.__fengbaoShelterAuto;
   if (previous?.running) return;
   if (globalThis.__fengbaoWorkAssignment?.running || globalThis.__fengbaoDormAssignment?.running ||
@@ -34,7 +34,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   const outfitCraftMaxTier = room => Math.min(6, 2 * (Number(room.level) || 0));
   if (dismissStatEnabled && !Object.hasOwn(statLabels, dismissStatKey)) throw new Error('请选择单项遣散的指定属性');
   if (dismissStatEnabled && (!Number.isInteger(dismissStat) || dismissStat < 1 || dismissStat > 10)) throw new Error('单项属性遣散阈值必须为 1–10 的整数');
-  const task = { running: true, cycleRunning: true, trainingOptions, parentReturns: previous?.parentReturns ?? [], stopRequested: false, intervalSeconds, rescueEnabled, rescueMode, rescueCount, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, godEnabled, birthEnabled: Boolean(birthEnabled), questEnabled: Boolean(questEnabled), upgradeEnabled: Boolean(upgradeEnabled), upgradeDigEnabled: Boolean(upgradeDigEnabled), craftOutfitsEnabled: Boolean(craftOutfitsEnabled), targetEnabled: Boolean(targetEnabled), targetRoom: String(targetRoom || ''), targetCount: Number(targetCount) || 0, targetStat: ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'].includes(targetStat) ? targetStat : 'str', targetProgress: previous?.targetProgress ?? targetProgress ?? null, targetBlockedUntil: previous?.targetBlockedUntil ?? 0, targetBlockedReason: previous?.targetBlockedReason ?? '', upgradeOrder: typeof normalizeShelterUpgradeOrder === 'function' ? normalizeShelterUpgradeOrder(upgradeOrder) : [], upgradeBlocked: previous?.upgradeBlocked ?? {}, upgradingRooms: previous?.upgradingRooms ?? {}, craftBlocked: previous?.craftBlocked ?? {}, lastDigFloor: previous?.lastDigFloor ?? null, logs: previous?.logs ?? [], message: '正在开启托管…', nextAt: null, pendingDispatch: previous?.pendingDispatch ?? {}, newcomers: previous?.newcomers ?? [], knownIds: previous?.knownIds ?? null, deployments: previous?.deployments ?? {}, autoParents: previous?.autoParents ?? [], autoAssigned: previous?.autoAssigned ?? [], autoPairs: previous?.autoPairs ?? [], pairAttempts: previous?.pairAttempts ?? {}, pairFailedUntil: previous?.pairFailedUntil ?? {}, recentEvictions: previous?.recentEvictions ?? {}, pairLogAt: previous?.pairLogAt ?? {}, evictCounts: previous?.evictCounts ?? {}, evictHoldUntil: previous?.evictHoldUntil ?? {}, recentMoves: previous?.recentMoves ?? {}, pendingWorkBlocked: previous?.pendingWorkBlocked ?? {}, pendingWorkDone: previous?.pendingWorkDone ?? {}, dormWorkHold: previous?.dormWorkHold ?? {}, reuniteAt: previous?.reuniteAt ?? {}, gateHold: previous?.gateHold ?? {}, questRetries: previous?.questRetries ?? {}, questWeek: previous?.questWeek ?? null, questDone: previous?.questDone ?? [], questStartBlocked: previous?.questStartBlocked ?? {}, questLogAt: previous?.questLogAt ?? {}, questDoneNotice: previous?.questDoneNotice ?? false };
+  const task = { running: true, cycleRunning: true, trainingOptions, parentReturns: previous?.parentReturns ?? [], stopRequested: false, intervalSeconds, rescueEnabled, rescueMode, rescueCount, recallEvents, dismissEnabled, dismissTotal, dismissStatEnabled, dismissStatKey, dismissStat, godEnabled, birthEnabled: Boolean(birthEnabled), questEnabled: Boolean(questEnabled), upgradeEnabled: Boolean(upgradeEnabled), upgradeDigEnabled: Boolean(upgradeDigEnabled), craftOutfitsEnabled: Boolean(craftOutfitsEnabled), craftMultiEnabled: Boolean(craftMultiEnabled), targetEnabled: Boolean(targetEnabled), targetRoom: String(targetRoom || ''), targetCount: Number(targetCount) || 0, targetStat: ['str', 'per', 'end', 'cha', 'int', 'agi', 'lck'].includes(targetStat) ? targetStat : 'str', targetProgress: previous?.targetProgress ?? targetProgress ?? null, targetBlockedUntil: previous?.targetBlockedUntil ?? 0, targetBlockedReason: previous?.targetBlockedReason ?? '', upgradeOrder: typeof normalizeShelterUpgradeOrder === 'function' ? normalizeShelterUpgradeOrder(upgradeOrder) : [], upgradeBlocked: previous?.upgradeBlocked ?? {}, upgradingRooms: previous?.upgradingRooms ?? {}, craftBlocked: previous?.craftBlocked ?? {}, lastDigFloor: previous?.lastDigFloor ?? null, logs: previous?.logs ?? [], message: '正在开启托管…', nextAt: null, pendingDispatch: previous?.pendingDispatch ?? {}, newcomers: previous?.newcomers ?? [], knownIds: previous?.knownIds ?? null, deployments: previous?.deployments ?? {}, autoParents: previous?.autoParents ?? [], autoAssigned: previous?.autoAssigned ?? [], autoPairs: previous?.autoPairs ?? [], pairAttempts: previous?.pairAttempts ?? {}, pairFailedUntil: previous?.pairFailedUntil ?? {}, recentEvictions: previous?.recentEvictions ?? {}, pairLogAt: previous?.pairLogAt ?? {}, evictCounts: previous?.evictCounts ?? {}, evictHoldUntil: previous?.evictHoldUntil ?? {}, recentMoves: previous?.recentMoves ?? {}, pendingWorkBlocked: previous?.pendingWorkBlocked ?? {}, pendingWorkDone: previous?.pendingWorkDone ?? {}, dormWorkHold: previous?.dormWorkHold ?? {}, reuniteAt: previous?.reuniteAt ?? {}, gateHold: previous?.gateHold ?? {}, questRetries: previous?.questRetries ?? {}, questWeek: previous?.questWeek ?? null, questDone: previous?.questDone ?? [], questStartBlocked: previous?.questStartBlocked ?? {}, questLogAt: previous?.questLogAt ?? {}, questDoneNotice: previous?.questDoneNotice ?? false };
   // 游戏每 10 分钟结算一次感情，临时配对至少要撑过一次结算；2 分钟太短，
   // 服务端换房后扩展会提前放弃，随后又把两人搬回宿舍，造成来回切换。
   const pairGraceMs = 12 * 60000;
@@ -257,7 +257,12 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         if (action.type === 'assign' && resident.roomId === action.roomId) return true;
         const source = view.state.rooms.find(room => room.id === resident.roomId);
         const record = mode === 'return' ? coordination.entries.find(entry => entry.residentId === resident.id) : null;
-        const sourceBlocked = Boolean(source?.craft || source?.incident && !(mode === 'return' && frozenDoorRaiders(source)));
+        // 服装制作开始后不再要求居民留在房间；允许同一居民从制作中的服装工坊
+        // 转去另一间服装工坊开工。其他生产/制作房间仍然禁止在制作期间调人。
+        const craftShuttle = mode === 'craft' && action.type === 'assign' && source?.type === 'tailor' &&
+          !source.incident && view.state.rooms.find(room => room.id === action.roomId)?.type === 'tailor';
+        const sourceBlocked = Boolean((source?.craft && !craftShuttle) ||
+          source?.incident && !(mode === 'return' && frozenDoorRaiders(source)));
         const reason = resident.deadAt !== null || resident.away !== null || resident.adultAt > view.serverTime ? '居民当前无法调动' :
           coordination.quests.has(resident.id) ? '本周任务小队' :
           coordination.protectedIds.has(resident.id) && !record && !(mode === 'pair' && task.parentReturns.some(entry => entry.residentId === resident.id && entry.expectedRoomId === resident.roomId)) && !(mode === 'rescue' && task.incidentSnapshot?.some(entry => entry.residentId === resident.id && entry.expectedRoomId === resident.roomId)) ? '有配对或救援归岗记录' :
@@ -1186,10 +1191,54 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     }));
   }
 
-  // 自动造服装：按 6→5→4→3→2→1→0 逐档集齐，6 种全亮后才去下一档；
+  // 装备仓库剩余格数：基础 20 格，每级仓库加 10 格（与游戏一致）；
+  // 扣除未穿戴装备和正在制作、尚未入库的装备。返回 null 表示数据不足，不限制开工。
+  function outfitStorageFreeSlots() {
+    if (!Array.isArray(view.state.items)) return null;
+    const storage = view.state.rooms.filter(room =>
+      room.type === 'storage' && Number(room.builtAt) <= view.serverTime)
+      .reduce((sum, room) => sum + Number(room.width || 0) * Number(room.level || 0), 0);
+    const equipped = new Set(view.state.residents.flatMap(resident =>
+      [resident.weaponId, resident.outfitId].filter(id => id !== null && id !== undefined)));
+    const stored = view.state.items.filter(item => !equipped.has(item.id)).length;
+    const pending = view.state.rooms.filter(room => room.craft).length;
+    return Math.max(0, 20 + 10 * storage - stored - pending);
+  }
+
+  // 给空工坊开工的居民：优先待岗居民，其次服装工坊现有居民，不抽生产岗位。
+  // 制作开始后居民可以离开，所以同一个居民能依次开多间工坊。
+  function craftStarter() {
+    const excluded = protectedIds();
+    const usable = resident => resident && resident.deadAt === null && resident.away === null &&
+      resident.adultAt <= view.serverTime && !excluded.has(resident.id) &&
+      !task.populationPending?.includes(resident.id);
+    const idle = view.state.residents.filter(resident => usable(resident) && resident.roomId === null)
+      .sort((left, right) => (Number(right.stats?.cha) || 0) - (Number(left.stats?.cha) || 0) ||
+        left.id - right.id);
+    if (idle.length) return idle[0];
+    const inTailor = view.state.residents.filter(resident => {
+      if (!usable(resident)) return false;
+      const room = view.state.rooms.find(item => item.id === resident.roomId);
+      return room?.type === 'tailor' && !blockingIncident(room);
+    });
+    return inTailor.sort((left, right) => {
+      const leftRoom = view.state.rooms.find(item => item.id === left.roomId);
+      const rightRoom = view.state.rooms.find(item => item.id === right.roomId);
+      // 优先从有多名居民的工坊借人，避免把唯一居民调走后原工坊空置。
+      return adultsIn(rightRoom.id).length - adultsIn(leftRoom.id).length ||
+        (Number(right.stats?.cha) || 0) - (Number(left.stats?.cha) || 0) || left.id - right.id;
+    })[0] ?? null;
+  }
+
+  // 自动造服装：默认沿用单件模式；开启“多工坊同时制作”后由一名居民依次给空工坊开工。
+  async function autoCraftOutfits() {
+    return task.craftMultiEnabled ? autoCraftOutfitsMulti() : autoCraftOutfitsSingle();
+  }
+
+  // 单件模式（默认）：按 6→5→4→3→2→1→0 逐档集齐，6 种全亮后才去下一档；
   // 0–6 档全部集齐后持续制作 6 档。同一时间只制作一件，不占施工位；
   // 制作和升级共用废料，绝不使用星核汽水加速。
-  async function autoCraftOutfits() {
+  async function autoCraftOutfitsSingle() {
     const now = Date.now();
     for (const [id, until] of Object.entries(task.craftBlocked)) if (until <= now) delete task.craftBlocked[id];
     const tailors = view.state.rooms.filter(room =>
@@ -1251,6 +1300,144 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       task.craftBlocked[room.id] = Date.now() + 30 * 60000;
       logQuiet(`craft:error:${room.id}`, `自动造服装：制作 ${tier} 档失败：${error.message}，30 分钟内跳过这间工坊。`, 10 * 60000);
       try { await read(); } catch (readError) { if (readError.fatal || readError.stopped) throw readError; }
+    }
+  }
+
+  // 多工坊同时制作（开关开启时）：按同样顺序选档，所有空工坊同时开工；
+  // 开工后居民可以前往下一间空工坊，因此一名居民就能依次开满多间。
+  // 不占施工位，制作和升级共用废料，绝不使用星核汽水加速。
+  async function autoCraftOutfitsMulti() {
+    const now = Date.now();
+    for (const [id, until] of Object.entries(task.craftBlocked)) if (until <= now) delete task.craftBlocked[id];
+    const tailors = view.state.rooms.filter(room =>
+      room.type === 'tailor' && Number(room.builtAt) <= view.serverTime);
+    if (!tailors.length) {
+      logQuiet('craft:no-room', '自动造服装：没有已建成的服装工坊，等待建造或建成。', 30 * 60000);
+      return;
+    }
+    // 已完成的制作会留在工坊里等装备仓库空位，逐间提示。
+    for (const room of tailors) {
+      if (room.craft && Number(room.craft.doneAt) <= view.serverTime) {
+        logQuiet(`craft:storage:${room.id}`, `自动造服装：服装工坊（房间 ${room.id}）的 ${room.craft.tier} 档已制作完成，等待装备仓库空位入库。`, 30 * 60000);
+      }
+    }
+    const idleTailors = tailors.filter(room => !room.craft);
+    if (!idleTailors.length) return;
+    const progress = outfitCodexProgress();
+    const target = progress.find(item => item.missing.length);
+    const tier = target?.tier ?? 6;
+    const missingAtTier = target?.missing ?? [];
+    const cost = outfitCraftCost(tier);
+    // 只找能制作目标档位的空工坊；等级不足时等待自动升级，不跳过未集齐的高档。
+    const candidates = idleTailors.filter(room =>
+      room.upgradeAt === null && !room.incident && !room.unpowered && !task.craftBlocked[room.id] &&
+      outfitCraftMaxTier(room) >= tier)
+      .sort((left, right) => {
+        // 已有居民的工坊先开工，需要调人的空工坊稍后处理。
+        const byResident = Number(adultsIn(right.id).length > 0) - Number(adultsIn(left.id).length > 0);
+        return byResident || outfitCraftMaxTier(right) - outfitCraftMaxTier(left) ||
+          Number(right.level) - Number(left.level) || Number(right.width) - Number(left.width) ||
+          Number(left.floor) - Number(right.floor) || Number(left.id) - Number(right.id);
+      });
+    if (!candidates.length) {
+      const maxTier = tailors.reduce((max, room) => Math.max(max, outfitCraftMaxTier(room)), -1);
+      if (maxTier < tier) {
+        logQuiet(`craft:level:${tier}`, `自动造服装：${missingAtTier.length ? `${tier} 档还缺 ${missingAtTier.length} 种，` : '图鉴已全部集齐，'}服装工坊最高只能制作 ${maxTier} 档，目标 ${tier} 档，等待工坊升级。`, 30 * 60000);
+      } else if (!tailors.some(room => room.craft)) {
+        logQuiet(`craft:busy:${tier}`, `自动造服装：暂时没有可用的服装工坊制作 ${tier} 档（需要已建成、未升级、未停电且未被临时跳过）。`, 30 * 60000);
+      }
+      return;
+    }
+    let slots = outfitStorageFreeSlots();
+    if (slots !== null && slots <= 0) {
+      logQuiet('craft:storage-full', '自动造服装：装备仓库没有空位，暂时不开始新的制作。', 30 * 60000);
+      return;
+    }
+    // 只有空工坊需要这名开工居民；已有居民的工坊直接开工，不额外调人。
+    const needsStarter = candidates.some(room => adultsIn(room.id).length === 0);
+    const starter = needsStarter ? craftStarter() : null;
+    let starterId = starter?.id ?? null;
+    let started = 0, skippedForResident = false;
+    for (const room of candidates) {
+      if (stopped()) return;
+      if (slots !== null && slots <= 0) {
+        if (started) logQuiet('craft:storage-limit', `自动造服装：本轮已开始 ${started} 件，装备仓库空位已预留完，等待制作完成或腾出空位。`, 30 * 60000);
+        break;
+      }
+      // 上一次操作后重新读取；工坊可能已被服务端升级、占用或开始制作。
+      const current = view.state.rooms.find(item => item.id === room.id);
+      if (!current || current.craft || current.upgradeAt !== null || current.incident || current.unpowered ||
+          task.craftBlocked[current.id] || outfitCraftMaxTier(current) < tier) continue;
+      // 先确认资源再调居民，避免资源只够上一件时把居民白搬一趟。
+      const scrap = Number(view.state.resources?.scrap) || 0;
+      const parts = Number(view.state.resources?.parts) || 0;
+      if (scrap < cost.scrap || parts < cost.parts) {
+        if (!started) {
+          logQuiet(`craft:resource:${tier}`, `自动造服装：制作 ${tier} 档需 ${cost.scrap} 废料、${cost.parts} 零件（${missingAtTier.length ? `该档还缺 ${missingAtTier.length} 种` : '图鉴已全部集齐'}），当前 ${Math.floor(scrap)} 废料、${Math.floor(parts)} 零件，等待资源。`, 30 * 60000);
+        } else {
+          logQuiet(`craft:resource-limit:${tier}`, `自动造服装：本轮已开始 ${started} 件，剩余 ${Math.floor(scrap)} 废料、${Math.floor(parts)} 零件，不足以再开一间（每件需 ${cost.scrap} 废料${cost.parts ? `、${cost.parts} 零件` : ''}），等待资源。`, 30 * 60000);
+        }
+        break;
+      }
+      if (!adultsIn(current.id).length) {
+        if (!starterId) { skippedForResident = true; continue; }
+        const shuttle = view.state.residents.find(resident => resident.id === starterId);
+        if (!shuttle || shuttle.deadAt !== null || shuttle.away !== null || shuttle.adultAt > view.serverTime) {
+          starterId = null;
+          skippedForResident = true;
+          continue;
+        }
+        if (shuttle.roomId !== current.id) {
+          let moved;
+          try {
+            moved = await act({ type: 'assign', residentId: starterId, roomId: current.id }, 'craft');
+          } catch (error) {
+            if (error.fatal || error.stopped) throw error;
+            logQuiet(`craft:shuttle:${current.id}`, `自动造服装：调居民去工坊（房间 ${current.id}）开工失败：${error.message}，稍后再试。`, 10 * 60000);
+            try { await read(); } catch (readError) { if (readError.fatal || readError.stopped) throw readError; }
+            starterId = null;
+            skippedForResident = true;
+            continue;
+          }
+          if (!moved) {
+            logQuiet(`craft:shuttle:${current.id}`, `自动造服装：无法把居民调到工坊（房间 ${current.id}）开工，稍后再试。`, 10 * 60000);
+            starterId = null;
+            skippedForResident = true;
+            continue;
+          }
+          if (view.state.residents.find(item => item.id === starterId)?.roomId !== current.id) {
+            log('自动造服装：居民开工位置未确认，稍后再试。');
+            starterId = null;
+            skippedForResident = true;
+            continue;
+          }
+        }
+      }
+      const ready = view.state.rooms.find(item => item.id === current.id);
+      if (!ready || ready.craft || ready.upgradeAt !== null || ready.incident || ready.unpowered ||
+          task.craftBlocked[ready.id] || outfitCraftMaxTier(ready) < tier || !adultsIn(ready.id).length) continue;
+      try {
+        if (!await act({ type: 'craft', roomId: ready.id, tier })) return;
+        const updated = view.state.rooms.find(item => item.id === ready.id);
+        if (!updated?.craft || Number(updated.craft.tier) !== tier) {
+          log('自动造服装：制作结果未确认，稍后再试。');
+          return;
+        }
+        started++;
+        if (slots !== null) slots--;
+        const targetText = missingAtTier.length
+          ? `${tier} 档还缺 ${missingAtTier.length} 种，开始制作 ${tier} 档`
+          : '图鉴 0–6 档已全部集齐，持续制作 6 档';
+        log(`自动造服装：服装工坊（房间 ${ready.id}）${targetText}，花费 ${cost.scrap} 废料${cost.parts ? `、${cost.parts} 零件` : ''}。`);
+      } catch (error) {
+        if (error.fatal || error.stopped) throw error;
+        task.craftBlocked[ready.id] = Date.now() + 30 * 60000;
+        logQuiet(`craft:error:${ready.id}`, `自动造服装：制作 ${tier} 档失败：${error.message}，30 分钟内跳过这间工坊。`, 10 * 60000);
+        try { await read(); } catch (readError) { if (readError.fatal || readError.stopped) throw readError; }
+      }
+    }
+    if (skippedForResident) {
+      logQuiet(`craft:resident:${tier}`, '自动造服装：有空工坊，但没有可调用的待岗居民或服装工坊居民，等待居民空闲。', 30 * 60000);
     }
   }
 

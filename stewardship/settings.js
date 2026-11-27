@@ -5,7 +5,7 @@ const savedSettings = bindPersistentSettings('stewardship', [
   'dismiss-stat-enabled', 'dismiss-stat-key', 'dismiss-stat',
   'population-enabled', 'population-total', 'population-min-idle',
   'god-enabled', 'birth-enabled', 'quest-enabled',
-  'upgrade-enabled', 'upgrade-dig-enabled', 'upgrade-craft-enabled',
+  'upgrade-enabled', 'upgrade-dig-enabled', 'upgrade-craft-enabled', 'upgrade-craft-multi-enabled',
   'target-enabled', 'target-room', 'target-count', 'target-stat'
 ]);
 

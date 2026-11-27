@@ -44,7 +44,7 @@ async function popup({ task = null, saved, stored = {}, hostError = false } = {}
     globalThis.__fengbaoShelterAuto = { running: true, intervalSeconds: args[0], recallEvents: args[1],
       dismissEnabled: args[2], dismissTotal: args[3], dismissStatEnabled: args[4], dismissStatKey: args[5], dismissStat: args[6],
       rescueCount: args[7], rescueEnabled: args[8], rescueMode: args[9], godEnabled: args[10], birthEnabled: args[11],
-      questEnabled: args[12], trainingOptions: args[13], upgradeEnabled: args[14], upgradeDigEnabled: args[15], upgradeOrder: args[16], craftOutfitsEnabled: args[17], targetEnabled: args[18], targetRoom: args[19], targetCount: args[20], targetStat: args[21], populationOptions: args[22], logs: [], parentReturns: [], message: '运行中' };
+      questEnabled: args[12], trainingOptions: args[13], upgradeEnabled: args[14], upgradeDigEnabled: args[15], upgradeOrder: args[16], craftOutfitsEnabled: args[17], craftMultiEnabled: args[24], targetEnabled: args[18], targetRoom: args[19], targetCount: args[20], targetStat: args[21], populationOptions: args[22], logs: [], parentReturns: [], message: '运行中' };
   }`, page);
   const context = vm.createContext({
     document: { getElementById: id => elements.get(id), querySelector(selector) { assert.ok(elements.has(selector.slice(1)), selector); return elements.get(selector.slice(1)); },
@@ -128,6 +128,25 @@ test('托管设置保存升级挖层造服装选项，重开后恢复并按相�
   assert.equal(reopened.elements.get('upgrade-order').children.length, 13);
 });
 
+test('多工坊同时制作默认关闭，勾选自动造服装后可开并随启动参数传递', async () => {
+  const ui = await popup();
+  const multi = ui.elements.get('upgrade-craft-multi-enabled');
+  assert.equal(multi.checked, false);
+  assert.equal(multi.disabled, true);
+  ui.elements.get('upgrade-enabled').checked = true;
+  await ui.elements.get('upgrade-enabled').emit('change');
+  ui.elements.get('upgrade-craft-enabled').checked = true;
+  await ui.elements.get('upgrade-craft-enabled').emit('change');
+  assert.equal(multi.disabled, false);
+  multi.checked = true;
+  await multi.emit('change');
+  const reopened = await popup({ stored: ui.store });
+  assert.equal(reopened.elements.get('upgrade-craft-multi-enabled').checked, true);
+  await reopened.elements.get('settings').emit('submit');
+  assert.equal(reopened.page.selected[17], true);
+  assert.equal(reopened.page.selected[24], true);
+});
+
 test('目标建造控件独立保存恢复，启动参数不挤占训练偏好及升级选项', async () => {
   const progress = { room: 'training', trainStat: 'agi', startFloor: 23 };
   const ui = await popup({ stored: { shelterTargetProgress: progress } });
@@ -143,7 +162,7 @@ test('目标建造控件独立保存恢复，启动参数不挤占训练偏好�
   assert.deepEqual(Array.from(reopened.page.selected.slice(18, 22)), [true, 'training', 12, 'agi']);
   assert.equal(reopened.page.selected[14], false);
   assert.deepEqual(JSON.parse(JSON.stringify(reopened.page.selected[13])), { trainCharisma: false, trainLuck: false });
-  assert.deepEqual(JSON.parse(JSON.stringify(reopened.page.selected.at(-1))), progress);
+  assert.deepEqual(JSON.parse(JSON.stringify(reopened.page.selected[23])), progress);
 });
 
 test('日志导出和清空可用，本地日志未安装时保留托管能力并显示错误', async () => {

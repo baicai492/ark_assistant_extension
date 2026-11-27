@@ -45,6 +45,7 @@ const upgradeEnabled = document.querySelector('#upgrade-enabled');
 const upgradeSection = document.querySelector('#upgrade-section');
 const upgradeDigEnabled = document.querySelector('#upgrade-dig-enabled');
 const upgradeCraftEnabled = document.querySelector('#upgrade-craft-enabled');
+const upgradeCraftMultiEnabled = document.querySelector('#upgrade-craft-multi-enabled');
 const targetSection = document.querySelector('#target-section');
 const targetEnabled = document.querySelector('#target-enabled');
 const targetRoom = document.querySelector('#target-room');
@@ -197,6 +198,7 @@ function updateOptions() {
   populationOptions.disabled = populationTotal.disabled = populationMinIdle.disabled = running || !populationEnabled.checked;
   upgradeDigEnabled.disabled = running || !upgradeEnabled.checked;
   upgradeCraftEnabled.disabled = running || !upgradeEnabled.checked;
+  upgradeCraftMultiEnabled.disabled = running || !upgradeEnabled.checked || !upgradeCraftEnabled.checked;
   targetEnabled.disabled = running;
   targetRoom.disabled = running || !targetEnabled.checked;
   targetCount.disabled = running || !targetEnabled.checked;
@@ -228,6 +230,7 @@ for (const [section, checkbox] of [[rescueSection, rescueEnabled], [dismissSecti
   checkbox.addEventListener('change', () => { section.open = checkbox.checked; updateOptions(); });
 }
 for (const radio of [rescueAuto, rescueWorkers, dismissEnabled, dismissStatEnabled]) radio.addEventListener('change', updateOptions);
+upgradeCraftEnabled.addEventListener('change', updateOptions);
 targetRoom.addEventListener('change', updateOptions);
 godEnabled.addEventListener('change', () => {
   if (godEnabled.checked) {
@@ -288,7 +291,7 @@ async function refresh() {
   clearTimeout(polling);
   const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: () => {
     const task = globalThis.__fengbaoShelterAuto;
-    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, populationOptions: task.populationOptions, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, questEnabled: task.questEnabled, upgradeEnabled: task.upgradeEnabled, upgradeDigEnabled: task.upgradeDigEnabled, craftOutfitsEnabled: task.craftOutfitsEnabled, targetEnabled: task.targetEnabled, targetRoom: task.targetRoom, targetCount: task.targetCount, targetStat: task.targetStat, upgradeOrder: task.upgradeOrder, trainingOptions: task.trainingOptions, parentReturns: task.parentReturns, incidentSnapshot: task.incidentSnapshot, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
+    return task ? { running: task.running, stopRequested: task.stopRequested, intervalSeconds: task.intervalSeconds, rescueEnabled: task.rescueEnabled, rescueMode: task.rescueMode, rescueCount: task.rescueCount, recallEvents: task.recallEvents, dismissEnabled: task.dismissEnabled, dismissTotal: task.dismissTotal, dismissStatEnabled: task.dismissStatEnabled, dismissStatKey: task.dismissStatKey, dismissStat: task.dismissStat, populationOptions: task.populationOptions, godEnabled: task.godEnabled, birthEnabled: task.birthEnabled, questEnabled: task.questEnabled, upgradeEnabled: task.upgradeEnabled, upgradeDigEnabled: task.upgradeDigEnabled, craftOutfitsEnabled: task.craftOutfitsEnabled, craftMultiEnabled: task.craftMultiEnabled, targetEnabled: task.targetEnabled, targetRoom: task.targetRoom, targetCount: task.targetCount, targetStat: task.targetStat, upgradeOrder: task.upgradeOrder, trainingOptions: task.trainingOptions, parentReturns: task.parentReturns, incidentSnapshot: task.incidentSnapshot, logs: task.logs, message: task.message, nextAt: task.nextAt } : null;
   } });
   const task = result.result;
   running = Boolean(task?.running);
@@ -317,6 +320,7 @@ async function refresh() {
     upgradeEnabled.checked = Boolean(task.upgradeEnabled);
     upgradeDigEnabled.checked = Boolean(task.upgradeDigEnabled);
     upgradeCraftEnabled.checked = Boolean(task.craftOutfitsEnabled);
+    upgradeCraftMultiEnabled.checked = Boolean(task.craftMultiEnabled);
     targetEnabled.checked = Boolean(task.targetEnabled);
     targetRoom.value = task.targetRoom || '';
     targetCount.value = task.targetCount ?? 12;
@@ -383,7 +387,7 @@ settings.addEventListener('submit', async event => {
         : {};
       const shelterTargetProgress = storedTarget.shelterTargetProgress ?? null;
       await chrome.scripting.executeScript({ target: { tabId }, files: ['stewardship/log-bridge.js', 'stewardship/upgrade-plan.js', 'stewardship/target-plan.js', 'workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'] });
-      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining, population, storedTargetProgress) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining, population, storedTargetProgress); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, trainingOptions(), upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder, upgradeEnabled.checked && upgradeCraftEnabled.checked, targetEnabled.checked, targetRoom.value, Number(targetCount.value), targetStat.value, { enabled: populationEnabled.checked, total: Number(populationTotal.value), minIdle: Number(populationMinIdle.value) }, shelterTargetProgress] });
+      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining, population, storedTargetProgress, craftMulti) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining, population, storedTargetProgress, craftMulti); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, trainingOptions(), upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder, upgradeEnabled.checked && upgradeCraftEnabled.checked, targetEnabled.checked, targetRoom.value, Number(targetCount.value), targetStat.value, { enabled: populationEnabled.checked, total: Number(populationTotal.value), minIdle: Number(populationMinIdle.value) }, shelterTargetProgress, upgradeEnabled.checked && upgradeCraftEnabled.checked && upgradeCraftMultiEnabled.checked] });
       chrome.runtime.sendMessage({ type: 'fengbao-shelter-log-watch', tabId, running: true }).catch(() => {});
     }
     await refresh();
