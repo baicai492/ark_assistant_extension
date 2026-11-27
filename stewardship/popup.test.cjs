@@ -35,7 +35,9 @@ async function popup({ task = null, saved, stored = {}, hostError = false } = {}
   const store = { shelterLogs: ['测试日志'], ...structuredClone(stored) }, injections = [], messages = [], exported = [];
   const local = { async get(keys) { return Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(key => [key, store[key]])); },
     async set(values) { Object.assign(store, values); }, async remove(key) { delete store[key]; } };
-  const page = vm.createContext({ __fengbaoShelterAuto: task, chrome: { storage: { local } }, clearTimeout() {},
+  const page = vm.createContext({ __fengbaoShelterAuto: task, window: { addEventListener() {}, postMessage() {} },
+    location: { origin: 'https://game.arkengine.me' },
+    chrome: { storage: { local, onChanged: { addListener() {} } } }, clearTimeout() {},
     fetch: async () => ({ ok: true, json: async () => ({ serverTime: 1000000, state: { rooms: [], residents: [], births: [], quests: [] } }) }) });
   vm.runInContext(`function startShelterAuto(...args) {
     globalThis.selected = args;
@@ -88,6 +90,12 @@ test('托管面板默认600秒、原生救援一次，进阶开关关闭并传�
   assert.equal(reopened.elements.get('train-luck').checked, true);
 });
 
+test('运行中优先显示任务内存日志，不使用滞后的存储日志', async () => {
+  const task = { running: true, intervalSeconds: 600, recallEvents: 6, logs: ['最新日志'], parentReturns: [] };
+  const ui = await popup({ task, stored: { shelterLogs: ['旧日志'] } });
+  assert.equal(ui.elements.get('logs').value, '最新日志');
+});
+
 test('托管面板恢复运行参数、显示具体归岗原因并请求结束配对和停止', async () => {
   const task = { running: true, godEnabled: false, birthEnabled: true, intervalSeconds: 600, recallEvents: 6,
     rescueEnabled: true, rescueMode: 'auto', rescueCount: 1, dismissTotal: 20, trainingOptions: { trainLuck: true },
@@ -121,19 +129,21 @@ test('托管设置保存升级挖层造服装选项，重开后恢复并按相�
 });
 
 test('目标建造控件独立保存恢复，启动参数不挤占训练偏好及升级选项', async () => {
-  const ui = await popup();
+  const progress = { room: 'training', trainStat: 'agi', startFloor: 23 };
+  const ui = await popup({ stored: { shelterTargetProgress: progress } });
   ui.elements.get('target-enabled').checked = true;
   ui.elements.get('target-room').value = 'training';
   ui.elements.get('target-count').value = '12';
   ui.elements.get('target-stat').value = 'agi';
   await ui.elements.get('target-enabled').emit('change');
-  const reopened = await popup({ stored: ui.store });
+  const reopened = await popup({ stored: { ...ui.store, shelterTargetProgress: progress } });
   assert.equal(reopened.elements.get('target-enabled').checked, true);
   assert.equal(reopened.elements.get('target-stat').disabled, false);
   await reopened.elements.get('settings').emit('submit');
   assert.deepEqual(Array.from(reopened.page.selected.slice(18, 22)), [true, 'training', 12, 'agi']);
   assert.equal(reopened.page.selected[14], false);
   assert.deepEqual(JSON.parse(JSON.stringify(reopened.page.selected[13])), { trainCharisma: false, trainLuck: false });
+  assert.deepEqual(JSON.parse(JSON.stringify(reopened.page.selected.at(-1))), progress);
 });
 
 test('日志导出和清空可用，本地日志未安装时保留托管能力并显示错误', async () => {

@@ -341,7 +341,9 @@ async function refresh() {
   if (!running && records.length) status.textContent += ' 归岗记录保留；重新开启托管后继续恢复。';
   if (running && task.nextAt && !task.stopRequested) status.textContent += ` 下次检查倒计时：${Math.max(0, Math.ceil((task.nextAt - Date.now()) / 1000))} 秒。`;
   const { shelterLogs = [], shelterLogStatus } = await chrome.storage.local.get(['shelterLogs', 'shelterLogStatus']);
-  const source = shelterLogs.length ? shelterLogs.slice(-logLimit) : task?.logs ?? [];
+  // 运行中优先显示任务内存里的日志：存储写入有节流，直接读存储会漏掉刚发生的建造/升级记录。
+  const source = running && task?.logs?.length ? task.logs
+    : shelterLogs.length ? shelterLogs.slice(-logLimit) : task?.logs ?? [];
   // 日志没变化时不再拼接和重写整个 textarea；否则面板每秒都要处理几十万字符。
   const signature = `${source.length}:${source[source.length - 1] ?? ''}`;
   if (signature !== logSignature) {
@@ -376,8 +378,12 @@ settings.addEventListener('submit', async event => {
     } else {
       await savedSettings.save();
       await chrome.storage.local.set({ shelterUpgradeOrder: upgradeOrder });
-      await chrome.scripting.executeScript({ target: { tabId }, files: ['stewardship/upgrade-plan.js', 'stewardship/target-plan.js', 'workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'] });
-      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining, population) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining, population); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, trainingOptions(), upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder, upgradeEnabled.checked && upgradeCraftEnabled.checked, targetEnabled.checked, targetRoom.value, Number(targetCount.value), targetStat.value, { enabled: populationEnabled.checked, total: Number(populationTotal.value), minIdle: Number(populationMinIdle.value) }] });
+      const storedTarget = targetEnabled.checked
+        ? await chrome.storage.local.get('shelterTargetProgress').catch(() => ({}))
+        : {};
+      const shelterTargetProgress = storedTarget.shelterTargetProgress ?? null;
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['stewardship/log-bridge.js', 'stewardship/upgrade-plan.js', 'stewardship/target-plan.js', 'workforce/planner.js', 'workforce/gear.js', 'stewardship/god-plan.js', 'stewardship/runner.js'] });
+      await chrome.scripting.executeScript({ target: { tabId }, func: (seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining, population, storedTargetProgress) => { startShelterAuto(seconds, events, dismiss, total, statEnabled, statKey, stat, rescues, rescue, mode, god, birth, quest, training, upgrade, dig, order, craft, targetOn, room, count, targetTraining, population, storedTargetProgress); }, args: [Number(interval.value), Number(recall.value), dismissNewcomers.checked && dismissEnabled.checked, Number(dismissTotal.value), dismissNewcomers.checked && dismissStatEnabled.checked, dismissStatKey.value, Number(dismissStat.value), Number(rescueCount.value), rescueEnabled.checked, rescueAuto.checked ? 'auto' : 'workers', godEnabled.checked, birthEnabled.checked, questEnabled.checked, trainingOptions(), upgradeEnabled.checked, upgradeDigEnabled.checked, upgradeOrder, upgradeEnabled.checked && upgradeCraftEnabled.checked, targetEnabled.checked, targetRoom.value, Number(targetCount.value), targetStat.value, { enabled: populationEnabled.checked, total: Number(populationTotal.value), minIdle: Number(populationMinIdle.value) }, shelterTargetProgress] });
       chrome.runtime.sendMessage({ type: 'fengbao-shelter-log-watch', tabId, running: true }).catch(() => {});
     }
     await refresh();

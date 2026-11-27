@@ -7,6 +7,9 @@ const shelterLogHost = 'com.fengbao.shelter_log';
 const shelterLogLimit = 2000;
 // 推送和清空都串行执行，避免多个 native host 进程同时写同一个日志文件。
 let shelterLogQueue = Promise.resolve();
+// 单次读取页面失败（页面切换、扩展刚重载）不能立刻停掉定时推送；
+// 连续多次确认页面里确实没有运行中的任务后才停止。
+const shelterLogMisses = new Map();
 function queueShelterLogTask(task) {
   const run = shelterLogQueue.then(task);
   shelterLogQueue = run.catch(() => {});
@@ -71,10 +74,32 @@ async function readPageLog(tabId) {
           : { running: false, logs: [] };
       }
     });
-    return result?.result ?? { running: false, logs: [] };
+    const page = result?.result;
+    return page ? { ok: true, ...page } : { ok: true, running: false, logs: [] };
   } catch {
-    return { running: false, logs: [] };
+    return { ok: false, running: false, logs: [] };
   }
+}
+
+// 记录哪些标签页需要持续推送日志；扩展重载或后台重启后据此恢复 alarm。
+async function rememberShelterLogWatch(tabId, running) {
+  try {
+    const { shelterLogWatch = {} } = await chrome.storage.local.get('shelterLogWatch');
+    if (running) shelterLogWatch[tabId] = true;
+    else delete shelterLogWatch[tabId];
+    await chrome.storage.local.set({ shelterLogWatch });
+  } catch {}
+}
+async function restoreShelterLogWatches() {
+  try {
+    const { shelterLogWatch = {} } = await chrome.storage.local.get('shelterLogWatch');
+    for (const id of Object.keys(shelterLogWatch)) {
+      const tabId = Number(id);
+      if (!Number.isInteger(tabId)) continue;
+      await chrome.alarms.create(`${shelterLogPrefix}${tabId}`, { periodInMinutes: 0.5 });
+      await queueShelterLogTask(() => pushShelterLog(tabId)).catch(() => {});
+    }
+  } catch {}
 }
 
 // 每 30 秒把最近一段日志交给 host 追加；host 会去重，重复发送不会写重复行。
@@ -84,7 +109,17 @@ async function pushShelterLog(tabId) {
   // 先各自截断再合并，避免为了写最近一段而反复拷贝整份历史日志。
   const logs = mergeLogs(shelterLogs.slice(-shelterLogLimit), (page.logs ?? []).slice(-shelterLogLimit)).slice(-shelterLogLimit);
   if (logs.length) await sendShelterLogs(logs);
-  if (!page.running) await stopShelterLog(tabId);
+  if (!page.ok) return;
+  if (page.running) {
+    shelterLogMisses.delete(tabId);
+    return;
+  }
+  const misses = (shelterLogMisses.get(tabId) ?? 0) + 1;
+  shelterLogMisses.set(tabId, misses);
+  if (misses < 3) return;
+  shelterLogMisses.delete(tabId);
+  await rememberShelterLogWatch(tabId, false);
+  await stopShelterLog(tabId);
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -102,15 +137,25 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (!Number.isInteger(tabId) || tabId < 0) throw new Error('缺少标签页');
     if (message.running) {
       await chrome.alarms.create(`${shelterLogPrefix}${tabId}`, { periodInMinutes: 0.5 });
+      await rememberShelterLogWatch(tabId, true);
       await queueShelterLogTask(() => pushShelterLog(tabId));
     } else {
       // 关闭托管时页面里可能还有最后几行没写入存储，稍等后取一次内存日志。
       await new Promise(resolve => setTimeout(resolve, 500));
       await queueShelterLogTask(() => pushShelterLog(tabId));
+      await rememberShelterLogWatch(tabId, false);
       await stopShelterLog(tabId);
     }
   })().then(() => respond({ ok: true }), error => respond({ error: error.message }));
   return true;
+});
+
+chrome.runtime.onStartup?.addListener(() => { void restoreShelterLogWatches(); });
+chrome.runtime.onInstalled?.addListener(() => { void restoreShelterLogWatches(); });
+chrome.tabs.onRemoved?.addListener(tabId => {
+  shelterLogMisses.delete(tabId);
+  void rememberShelterLogWatch(tabId, false);
+  void stopShelterLog(tabId);
 });
 
 async function focusTab(tabId) {

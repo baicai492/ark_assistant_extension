@@ -534,6 +534,84 @@ test('目标建造独立运行并保留训练属性，事件中继续建造', as
   }
 });
 
+test('目标进度从扩展存储恢复，重启后不从新的空楼层重算', async () => {
+  const progress = { room: 'power', trainStat: null, startFloor: 2 };
+  const state = view([], [room(1, 'elevator', { floor: 1, col: 1 }),
+    room(2, 'elevator', { floor: 2, col: 1 }), room(3, 'power', { floor: 2, col: 2, width: 1 })],
+  { depth: 2, resources: { scrap: 10000 } });
+  const storage = {
+    async get(keys) {
+      const list = Array.isArray(keys) ? keys : [keys];
+      return Object.fromEntries(list.map(key => [key, key === 'shelterTargetProgress' ? structuredClone(progress) : undefined]));
+    },
+    async set() {}, async remove() {}
+  };
+  const result = await run(state, { target: true, targetRoom: 'power', targetCount: 3, upgrade: true },
+    { globals: { chrome: { storage: { local: storage } } } });
+  assert.equal(result.task.targetProgress.startFloor, 2);
+  const builds = result.actions.filter(action => action.type === 'build');
+  assert.ok(builds.length >= 1);
+  assert.deepEqual([builds[0].floor, builds[0].col], [2, 3]);
+  assert.ok(!result.task.logs.some(line => line.includes('从第 1 层开始')));
+  await result.stop();
+});
+
+test('目标建造回包报错但游戏已开始施工时按成功记录，不再封锁五分钟', async () => {
+  const state = view([], [room(1, 'elevator', { floor: 1, col: 1 })],
+    { depth: 1, resources: { scrap: 10000 } });
+  let rejected = false;
+  const result = await run(state, { target: true, targetRoom: 'storage', targetCount: 2 }, {
+    before: async ({ server, action }) => {
+      if (action?.type !== 'build' || rejected) return;
+      rejected = true;
+      // 模拟施工已经提交成功，但接口回包是邻接错误（例如超时后重试拿到旧错误）。
+      server.state.rooms.push(room(99, 'storage', {
+        floor: action.floor, col: action.col, builtAt: server.serverTime + 600000
+      }));
+      return { ok: false, status: 409, redirected: false,
+        json: async () => ({ error: '新房间要紧挨着电梯或已有房间' }) };
+    }
+  });
+  const builds = result.actions.filter(action => action.type === 'build');
+  assert.equal(builds.length, 1);
+  assert.ok(result.task.logs.some(line => line.includes('已按游戏状态确认施工')), result.task.logs.join('\n'));
+  assert.equal(result.task.targetBlockedUntil, 0);
+  assert.ok(!result.task.logs.some(line => line.includes('5 分钟后再试')));
+  await result.tick(30000);
+  assert.equal(result.actions.filter(action => action.type === 'build').length, 2, '下一步应继续建造而不是等待五分钟');
+  await result.stop();
+});
+
+test('目标建造真实失败只等待一分钟，并带出目标进度', async () => {
+  const state = view([], [room(1, 'elevator', { floor: 1, col: 1 })],
+    { depth: 1, resources: { scrap: 10000 } });
+  const result = await run(state, { target: true, targetRoom: 'storage', targetCount: 2 }, {
+    before: async ({ action }) => action?.type === 'build'
+      ? { ok: false, status: 409, redirected: false,
+        json: async () => ({ error: '新房间要紧挨着电梯或已有房间' }) }
+      : undefined
+  });
+  assert.ok(result.task.logs.some(line => line.includes('1 分钟后再试')), result.task.logs.join('\n'));
+  assert.ok(result.task.targetBlockedUntil - 1000000 <= 60000);
+  await result.tick(30000);
+  assert.equal(result.actions.filter(action => action.type === 'build').length, 1, '封锁期内不应重复提交');
+  await result.tick(30000);
+  assert.equal(result.actions.filter(action => action.type === 'build').length, 2);
+  await result.stop();
+});
+
+test('注入环境没有 storage API 时通过日志桥接保存目标进度', async () => {
+  const messages = [];
+  const state = view([], [room(1, 'elevator', { floor: 1, col: 1 })], { depth: 1, resources: { scrap: 10000 } });
+  const result = await run(state, { target: true, targetRoom: 'storage', targetCount: 2 },
+    { globals: { window: { postMessage: (message, origin) => messages.push({ message, origin }) } } });
+  const saved = messages.map(item => item.message).find(message => message?.type === 'target-progress');
+  assert.ok(saved, '应向日志桥接发送目标进度');
+  assert.deepEqual(plain(saved.progress), { room: 'storage', trainStat: null, startFloor: 1 });
+  assert.ok(messages.every(item => item.origin === 'https://game.arkengine.me'));
+  await result.stop();
+});
+
 test('自动生育保留原生产与训练岗，确认家庭后回原岗，升级原岗等待恢复', async () => {
   const state = view([person(1, { roomId: 1, stats: stats(10) }), person(2, { roomId: 2, stats: stats(10) })],
     [room(1, 'power'), room(2, 'training', { trainStat: 'str' }), room(3, 'quarters')]);

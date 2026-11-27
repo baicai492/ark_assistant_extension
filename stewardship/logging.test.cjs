@@ -31,6 +31,29 @@ test('本地日志程序通过标准帧追加、去重、清空，不执行安�
   fs.rmSync(temp, { recursive: true });
 });
 
+test('后台读取页面日志单次失败不会停掉定时推送，连续确认停止后才清理', async () => {
+  let cleared = 0, reads = 0;
+  const context = vm.createContext({ chrome: {
+    runtime: { onMessage: { addListener() {} }, sendNativeMessage: async () => ({ ok: true, file: '测试目录/logs/shelter.log' }) },
+    storage: { local: { get: async () => ({ shelterLogs: ['旧日志'] }), set: async () => {} } },
+    scripting: { executeScript: async () => {
+      reads++;
+      if (reads === 1) throw new Error('页面暂时不可读');
+      return [{ result: { running: false, logs: [] } }];
+    } },
+    alarms: { clear: async () => { cleared++; }, create: async () => {}, onAlarm: { addListener() {} } },
+    tabs: { onRemoved: { addListener() {} }, onUpdated: { addListener() {} } }
+  } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../background.js'), 'utf8'), context);
+  await context.pushShelterLog(42);
+  assert.equal(cleared, 0, '单次读取失败不能停掉推送');
+  await context.pushShelterLog(42);
+  await context.pushShelterLog(42);
+  assert.equal(cleared, 0);
+  await context.pushShelterLog(42);
+  assert.equal(cleared, 1);
+});
+
 test('后台识别本地日志程序返回的错误，不伪报成功', async () => {
   const store = {}, handlers = [];
   const context = vm.createContext({ chrome: {
