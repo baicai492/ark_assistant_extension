@@ -65,6 +65,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   // 已有感情的两人被服务端分开后，最多每 10 分钟尝试恢复一次同房，
   // 给服务端感情结算留出时间，避免每 30 秒搬一次。
   const reuniteCooldownMs = 10 * 60000;
+  // 事件会临时打乱居民站位；无事件时持续记录全员岗位，事件结束后先按事件前
+  // 的完整分配归岗，再恢复大门、生产等日常调度。关闭自动救援时不沿用旧归岗任务。
+  task.incidentBaseline = rescueEnabled ? previous?.incidentBaseline ?? null : null;
+  task.incidentRestore = rescueEnabled ? previous?.incidentRestore ?? null : null;
+  task.incidentRestoreTries = rescueEnabled ? previous?.incidentRestoreTries ?? 0 : 0;
   task.incidentSnapshot = previous?.incidentSnapshot ?? null;
   task.incidentRescues = previous?.incidentRescues ?? {};
   task.populationOptions = populationOptions;
@@ -183,6 +188,24 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
     task.incidentSnapshot = task.incidentSnapshot.filter(entry => entry.status === 'waiting' || entry.status === 'deferred');
     if (!task.incidentSnapshot.length) task.incidentSnapshot = null;
   }
+  // 无事件时持续记录最新站位。发现阻塞事件时把它冻结为事件前分配，事件结束后
+  // 由 restoreIncidentPositions 恢复；游戏把救援者放回休息区也不会丢掉原岗位。
+  function rememberIncidentBaseline() {
+    if (!rescueEnabled) return;
+    if (!task.incidentRestore && view.state.rooms.some(blockingIncident)) {
+      if (task.incidentBaseline) {
+        task.incidentRestore = task.incidentBaseline.map(item => ({ ...item }));
+        task.incidentRestoreTries = 0;
+        log('事件开始：已记录事件前站位，结束后先恢复站位再继续调度。');
+      } else {
+        logQuiet('incident:no-baseline', '发现事件时没有事件前站位记录（托管在事件期间开启），本次结束后按救援记录归岗。', 60 * 60000);
+      }
+      return;
+    }
+    if (!task.incidentRestore) {
+      task.incidentBaseline = view.state.residents.map(resident => ({ residentId: resident.id, roomId: resident.roomId }));
+    }
+  }
   function assertView(data) {
     if (!Array.isArray(data?.state?.residents) || !Array.isArray(data.state.rooms) ||
         !Array.isArray(data.state.births) || !Array.isArray(data.state.explorers) || !Number.isFinite(data.serverTime)) {
@@ -205,6 +228,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         assertView(data);
         if (data.switches?.frozen) throw new Error('避难所正在维护，稍后重试');
         view = data;
+        rememberIncidentBaseline();
         if (populationOptions.enabled) observePopulationIdle();
         return;
       } catch (error) {
@@ -257,6 +281,11 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         if (action.type === 'assign' && resident.roomId === action.roomId) return true;
         const source = view.state.rooms.find(room => room.id === resident.roomId);
         const record = mode === 'return' ? coordination.entries.find(entry => entry.residentId === resident.id) : null;
+        // 事件归岗是在事件结束后把全员送回事件前岗位，需绕过“有归岗记录”的保护；
+        // 目标容量由 restoreIncidentPositions 预先检查，这里不能重复把本人算作占位。
+        const restoringIncident = mode === 'incident-restore' &&
+          (task.incidentRestore?.some(entry => entry.residentId === resident.id) ||
+            task.incidentSnapshot?.some(entry => entry.residentId === resident.id && entry.status === 'waiting'));
         // 服装制作开始后不再要求居民留在房间；允许同一居民从制作中的服装工坊
         // 转去另一间服装工坊开工。其他生产/制作房间仍然禁止在制作期间调人。
         const craftShuttle = mode === 'craft' && action.type === 'assign' && source?.type === 'tailor' &&
@@ -265,7 +294,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           source?.incident && !(mode === 'return' && frozenDoorRaiders(source)));
         const reason = resident.deadAt !== null || resident.away !== null || resident.adultAt > view.serverTime ? '居民当前无法调动' :
           coordination.quests.has(resident.id) ? '本周任务小队' :
-          coordination.protectedIds.has(resident.id) && !record && !(mode === 'pair' && task.parentReturns.some(entry => entry.residentId === resident.id && entry.expectedRoomId === resident.roomId)) && !(mode === 'rescue' && task.incidentSnapshot?.some(entry => entry.residentId === resident.id && entry.expectedRoomId === resident.roomId)) ? '有配对或救援归岗记录' :
+          coordination.protectedIds.has(resident.id) && !record && !restoringIncident && !(mode === 'pair' && task.parentReturns.some(entry => entry.residentId === resident.id && entry.expectedRoomId === resident.roomId)) && !(mode === 'rescue' && task.incidentSnapshot?.some(entry => entry.residentId === resident.id && entry.expectedRoomId === resident.roomId)) ? '有配对或救援归岗记录' :
           sourceBlocked ? '来源房间正在处理事故或制作' :
           resident.roomId !== expectedRoom ? '居民岗位已变化' :
           ['rename_resident', 'dismiss'].includes(action.type) && JSON.stringify([resident.name, resident.stats]) !== expectedIdentity ? '居民姓名或属性已变化' :
@@ -275,7 +304,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
           const target = view.state.rooms.find(room => room.id === action.roomId);
           const reasons = workforceRoomReasons(target, view.serverTime).filter(reason => mode !== 'rescue' || reason !== '事故处理中');
           if (target?.craft) reasons.push('正在制作');
-          if (mode !== 'rescue' && target && shelterRoomOccupancy(view, target.id, [], resident.id) >= target.width * 2) reasons.push('满员或已预留归岗名额');
+          if (mode !== 'rescue' && mode !== 'incident-restore' && target && shelterRoomOccupancy(view, target.id, [], resident.id) >= target.width * 2) reasons.push('满员或已预留归岗名额');
           if (record && target && (record.originalType !== target.type ||
               target.type === 'training' && record.originalTrainStat !== target.trainStat)) reasons.push('原房间用途已变化');
           if (reasons.length) {
@@ -342,6 +371,7 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         }
         assertView(data.view);
         view = data.view;
+        rememberIncidentBaseline();
         if (mode === 'population' || mode === 'population-newcomer') {
           if (view.state.residents.some(item => item.id === action.residentId)) throw fatal('人口优化：遣散结果未确认，已停止托管，请检查居民名单');
           task.populationLastDismissAt = view.serverTime;
@@ -378,7 +408,20 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       await read();
       if (stopped()) return;
       const resident = view.state.residents.find(item => item.id === entry.residentId);
-      if (!resident || resident.deadAt !== null || resident.away !== null || resident.roomId !== entry.expectedRoomId) {
+      if (!resident || resident.deadAt !== null || resident.away !== null) {
+        entry.status = 'released';
+        if (entry.kind === 'birth') {
+          for (const other of records) if (other.groupKey === entry.groupKey && other.startedAt === entry.startedAt) other.returnReady = true;
+        }
+        log('归岗记录：' + entry.name + ' 状态或位置已变化，取消自动归岗。');
+        continue;
+      }
+      const atOriginal = resident.roomId === entry.originalRoomId;
+      // 事件救援结束后游戏可能先把救援者送回门外休息区；记录仍可把他送回原岗位。
+      // 只有被移到其他实际房间时才视为手动改岗并取消记录。
+      const rescueFallback = entry.kind === 'rescue' &&
+        (resident.roomId === null || resident.roomId === entry.expectedRoomId || atOriginal);
+      if (!rescueFallback && resident.roomId !== entry.expectedRoomId) {
         entry.status = 'released';
         if (entry.kind === 'birth') {
           for (const other of records) if (other.groupKey === entry.groupKey && other.startedAt === entry.startedAt) other.returnReady = true;
@@ -387,13 +430,14 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         continue;
       }
       if (!ready(entry)) continue;
-      if (resident.roomId === entry.originalRoomId) {
+      if (atOriginal) {
         entry.status = 'returned'; entry.note = '';
         task.recentMoves[resident.id] = view.serverTime;
         continue;
       }
       try {
-        if (!await act({ type: 'assign', residentId: resident.id, roomId: entry.originalRoomId }, 'return')) continue;
+        if (!await act({ type: 'assign', residentId: resident.id, roomId: entry.originalRoomId },
+          entry.kind === 'rescue' ? 'incident-restore' : 'return')) continue;
       } catch (error) {
         entry.note = error.message;
         if (error.fatal || error.stopped || !error.permanent) throw error;
@@ -544,6 +588,12 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
 
   async function handleIncidents() {
     if (!rescueEnabled) return;
+    // 事件结束后先按事件前站位归岗，本次不再继续救援或调度；归岗未完成时
+    // 同样返回 true，避免大门补位在归岗前把休息区里的救援者抢走。
+    if (!view.state.rooms.some(blockingIncident) && task.incidentRestore) {
+      const result = await restoreIncidentPositions();
+      if (stopped() || result.attempted || result.retry || result.incomplete) return true;
+    }
     if (!workforceDoorGuardRequired(view)) await returnNightDoorRescuers();
     else await resumeDeferredDoorRescuers();
     if (stopped()) return;
@@ -2108,6 +2158,8 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
   // 调去大门后写入 gateHold：若服务端或手动操作又把人移出，同一人短时间内
   // 不再被放回大门，换下一个休息区居民；没有合适人选就留空，避免来回切。
   async function assignGateGuards() {
+    // 事件归岗未完成时休息区居民只是暂时路过，不能当作闲置人口补去大门。
+    if (task.incidentRestore) return;
     const now = view.serverTime;
     const doors = view.state.rooms.filter(room => room.type === 'door' && room.builtAt <= now &&
       room.upgradeAt === null && !room.unpowered && !room.incident)
@@ -2532,6 +2584,81 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
       log(message);
     }
   }
+  // 事件结束后按事件前的完整分配归岗：先恢复所有能恢复的居民，再恢复调度。
+  // 不先腾空房间，避免事件结束瞬间把居民成批撤到门外；目标房间满员时留给游戏/后续调度。
+  async function restoreIncidentPositions() {
+    const baseline = task.incidentRestore;
+    if (!baseline) return { attempted: false, incomplete: false, retry: false };
+    const target = new Map(baseline.map(({ residentId, roomId }) => [residentId, roomId]));
+    const eligible = resident => resident && resident.away === null && resident.deadAt === null;
+    const pendingList = () => view.state.residents.filter(resident =>
+      eligible(resident) && target.has(resident.id) && resident.roomId !== target.get(resident.id));
+    let pending = pendingList();
+    const total = pending.length;
+    let restored = 0;
+    let paused = false;
+    const incidentActive = () => view.state.rooms.some(blockingIncident);
+    for (let pass = 0; pass < 3 && pending.length && !paused; pass++) {
+      let progress = false;
+      for (const resident of pending) {
+        if (stopped()) break;
+        // 归位请求会刷新事件状态；新事件出现时保留事件前分配，先暂停归位。
+        if (incidentActive()) { paused = true; break; }
+        const roomId = target.get(resident.id);
+        if (resident.roomId === roomId) continue;
+        if (roomId !== null) {
+          const room = view.state.rooms.find(item => item.id === roomId);
+          const occupied = view.state.residents.filter(item => item.roomId === roomId && item.deadAt === null).length;
+          // 宿舍容量按游戏人口公式（宽度 ×(2+2×等级)），生产房间每格 2 人。
+          const capacity = room ? (room.type === 'quarters' ? room.width * (2 + 2 * room.level) : room.width * 2) : 0;
+          if (!room || occupied >= capacity) continue;
+        }
+        try {
+          if (!await act({ type: 'assign', residentId: resident.id, roomId }, 'incident-restore')) break;
+        } catch (error) {
+          if (error.fatal || error.stopped) throw error;
+          log(`事件恢复：${resident.name}#${resident.id} 无法回到${roomId === null ? '门外休息区' : `房间 ${roomId}`}：${error.message}。`);
+          try { await read(); } catch (readError) { if (readError.fatal || readError.stopped) throw readError; }
+          continue;
+        }
+        if (view.state.residents.find(item => item.id === resident.id)?.roomId !== roomId) {
+          log(`事件恢复：${resident.name}#${resident.id} 恢复结果未确认。`);
+        } else {
+          restored++;
+          progress = true;
+        }
+      }
+      if (stopped() || paused) break;
+      pending = pendingList();
+      if (!progress) break;
+    }
+    // 最后一人的归位请求也可能触发新事件，循环结束后再确认一次。
+    if (!paused && incidentActive()) paused = true;
+    if (paused) {
+      log(`事件恢复：归位期间出现新事件，暂停归位并保留事件前站位${restored ? `（已恢复 ${restored} 人）` : ''}。`);
+      return { attempted: total > 0, incomplete: true, retry: false, paused: true };
+    }
+    const skipped = pending.length;
+    if (!total) {
+      log('事件已结束：居民已由游戏自动归岗，无需额外恢复。');
+    } else {
+      log(`事件恢复：按事件前分配恢复 ${restored} 人${skipped ? `，仍有 ${skipped} 人未能归位` : '，站位已全部恢复'}。`);
+    }
+    // 少数居民可能因原房间已拆、满员或游戏限制暂时回不去。再试一轮，仍不行就交给正常调度。
+    const retry = skipped > 0 && task.incidentRestoreTries < 1;
+    if (skipped) {
+      log(retry
+        ? `事件恢复：仍有 ${skipped} 人未能回到事件前位置，下一轮再试。`
+        : `事件恢复：仍有 ${skipped} 人未能回到事件前位置，交由后续调度安排。`);
+    }
+    if (retry) {
+      task.incidentRestoreTries++;
+      return { attempted: total > 0, incomplete: true, retry: true };
+    }
+    task.incidentRestore = null;
+    task.incidentRestoreTries = 0;
+    return { attempted: total > 0, incomplete: skipped > 0, retry: false };
+  }
   // 快速检查：成年子代安排训练或工作、待产父母回岗、配对后补资源缺口、穿上装备，
   // 不必等完整检查间隔。
   async function quickCheck() {
@@ -2825,9 +2952,9 @@ function startShelterAuto(intervalSeconds, recallEvents, dismissEnabled, dismiss
         // 成年子代、待产父母、练满训练项的居民和装备不必等完整间隔：等待期间每 30 秒快速检查一次。
         // 只开自动周常或造神计划时也每 30 秒检查，及时编队出发、撤出练满的居民。
         while (!stopped() && Date.now() < nextAt) {
-          await wait(Math.min(task.birthEnabled || task.questEnabled || godEnabled || task.upgradeEnabled || task.targetEnabled || task.parentReturns.length || task.incidentSnapshot?.length ? 30000 : intervalSeconds * 1000, nextAt - Date.now()));
+          await wait(Math.min(task.birthEnabled || task.questEnabled || godEnabled || task.upgradeEnabled || task.targetEnabled || task.parentReturns.length || task.incidentSnapshot?.length || task.incidentRestore ? 30000 : intervalSeconds * 1000, nextAt - Date.now()));
           if (stopped()) break;
-          if (!task.birthEnabled && !task.questEnabled && !godEnabled && !task.upgradeEnabled && !task.targetEnabled && !task.parentReturns.length && !task.incidentSnapshot?.length) continue;
+          if (!task.birthEnabled && !task.questEnabled && !godEnabled && !task.upgradeEnabled && !task.targetEnabled && !task.parentReturns.length && !task.incidentSnapshot?.length && !task.incidentRestore) continue;
           if (globalThis.__fengbaoDormAssignment?.running || globalThis.__fengbaoWorkAssignment?.running ||
               globalThis.__fengbaoEquipmentAssignment?.running || globalThis.__fengbaoResidentRename?.running) continue;
           task.cycleRunning = true;

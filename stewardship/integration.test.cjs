@@ -1024,6 +1024,31 @@ test('归岗期间手动调动居民后取消记录，不强行拉回', async ()
   await result.stop();
 });
 
+test('事件结束后游戏把居民放回休息区，先恢复事件前站位再安排大门', async () => {
+  const state = view([person(1, { roomId: 1 }), person(2, { roomId: 2 })],
+    [room(1, 'diner'), room(2, 'power'), room(3, 'storage'), room(4, 'door')]);
+  const result = await run(state, { rescue: true, mode: 'workers', god: true });
+  // 无事件启动时已记录事件前站位；事件发生后由专人把居民 1 调入事件房。
+  result.server.state.rooms[2].incident = { kind: 'fire', since: 1 };
+  await result.tick(30000);
+  assert.equal(result.server.state.residents[0].roomId, 3, result.task.logs.join('\n'));
+  // 游戏在事件结束时把救援者和另一名居民都放进门外休息区。
+  result.server.state.rooms[2].incident = null;
+  result.server.state.residents[0].roomId = null;
+  result.server.state.residents[1].roomId = null;
+  const before = result.actions.length;
+  await result.tick(30000);
+  assert.deepEqual(result.server.state.residents.map(item => item.roomId), [1, 2], result.task.logs.join('\n'));
+  assert.equal(result.task.incidentRestore, null);
+  assert.ok(!result.actions.slice(before).some(action => action.type === 'assign' && action.roomId === 4),
+    '归岗完成前不能把休息区居民安排到大门');
+  await result.tick(30000);
+  assert.deepEqual(result.server.state.residents.map(item => item.roomId), [1, 2], result.task.logs.join('\n'));
+  assert.equal(result.task.incidentSnapshot, null);
+  assert.ok(!result.actions.some(action => action.type === 'assign' && action.roomId === 4), result.task.logs.join('\n'));
+  await result.stop();
+});
+
 test('提交前目标突然升级时不发送调动，快照和原岗预留保留', async () => {
   const state = view([person(1, { roomId: 1, name: '亲本★', stats: stats(10, { per: 9 }) })],
     [room(1, 'training', { trainStat: 'str' }), room(2, 'training', { trainStat: 'per' })]);
